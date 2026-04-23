@@ -1,6 +1,8 @@
-# DeepRelaxo Code
+# DeepRelaxo
 
-PyTorch inference pipeline for Transformer-based R2* estimation followed by DeepRelaxo UNet refinement.
+DeepRelaxo: Fast Mono-Exponential Magnitude Brain R2* Mapping With Reduced Echoes Using Self-Supervised Deep Learning (MRM paper).
+
+This repository contains a PyTorch inference pipeline for Transformer-based R2* estimation followed by DeepRelaxo UNet refinement.
 
 ## Layout
 
