@@ -1,0 +1,6 @@
+TE =
+
+    0.0049    0.0099    0.0148    0.0198    0.0247
+
+these are in seconds
+times 1000 if you are using millisecond (ms)

@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# IDEs
+.idea/
+.vscode/
+
+# Model checkpoints and large binary artifacts
+*.pth
+*.pt
+*.pkl
+*.ckpt
+
+# Medical image data and generated inference outputs
+*.nii
+*.nii.gz
+Data/inference/
