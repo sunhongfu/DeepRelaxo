@@ -74,8 +74,11 @@ class ImageReconstruction(nn.Module):
 
 
 def make_padding_mask(input_ids, padding_idx=0):
-    padding_mask = input_ids.eq(padding_idx).clone().detach().to(torch.bool)
-    return padding_mask
+    padding_mask = input_ids.eq(padding_idx)
+    if padding_mask.dim() == 3:
+        padding_mask = padding_mask.squeeze(-1)
+    padding_mask = padding_mask.to(torch.bool)
+    return padding_mask if padding_mask.any() else None
 
 class Transformer(nn.Module):
     def __init__(self):
@@ -95,10 +98,6 @@ class Transformer(nn.Module):
     def forward(self, src, tgt):
         src_key_padding_mask = make_padding_mask(src, padding_idx=-999)
         tgt_key_padding_mask = make_padding_mask(tgt, padding_idx=-999)
-
-        # Ensure masks are 2D (batch_size, seq_len)
-        src_key_padding_mask = src_key_padding_mask.squeeze(-1)
-        tgt_key_padding_mask = tgt_key_padding_mask.squeeze(-1)
 
         # Ensure the input tensors are in float32
         src = src.to(torch.float32)

@@ -1,0 +1,84 @@
+# DeepRelaxo configuration
+# Run: python run_deeprelaxo_pipeline.py --config config.yaml
+# Paths below can be relative or absolute.
+# `data_dir` is resolved relative to this YAML file.
+# Echo file paths are resolved relative to `data_dir`.
+
+# --- Required ---
+data_dir: demo   # subject folder containing your magnitude NIfTIs
+
+# Choose one of the following input styles:
+# 1. `echoes`: one 3D NIfTI per echo
+# 2. `echo_4d` + `te_ms`: one 4D NIfTI with echoes in the last dimension
+
+# Style 1: one item per echo, in echo order.
+# `file` is the magnitude NIfTI filename or path relative to `data_dir`.
+# `te_ms` is the echo time in milliseconds.
+echoes:
+  - file: mag1.nii
+    te_ms: 4.9
+  - file: mag2.nii
+    te_ms: 9.9
+  - file: mag3.nii
+    te_ms: 14.8
+  - file: mag4.nii
+    te_ms: 19.8
+  - file: mag5.nii
+    te_ms: 24.7
+# For MATLAB files, specify `variable` if the MAT file contains multiple variables.
+# If the MAT file contains exactly one usable 3D/4D numeric variable, `variable` can be omitted.
+# echoes:
+#   - file: mag1.mat
+#     variable: mag1
+#     te_ms: 4.9
+#   - file: mag2.mat
+#     variable: mag2
+#     te_ms: 9.9
+#   - file: mag3.mat
+#     variable: mag3
+#     te_ms: 14.8
+#   - file: mag4.mat
+#     variable: mag4
+#     te_ms: 19.8
+#   - file: mag5.mat
+#     variable: mag5
+#     te_ms: 24.7
+
+# Style 2: uncomment for a single 4D magnitude NIfTI.
+# echo_4d: magnitudes_4d.nii.gz
+# te_ms: [4.9, 9.9, 14.8, 19.8, 24.7]
+#
+# Or, for a 4D MATLAB file:
+# Specify `variable` if the MAT file contains multiple variables.
+# If the MAT file contains exactly one usable 3D/4D numeric variable, `variable` can be omitted.
+# echo_4d:
+#   file: magnitudes_4d.mat
+#   variable: mags
+# te_ms: [4.9, 9.9, 14.8, 19.8, 24.7]
+
+# --- Optional inputs ---
+# Brain mask NIfTI. If omitted or set to null, the code uses an all-ones mask.
+mask: BET_mask.nii
+# mask: null
+
+# --- Output ---
+# Intermediate estimator output folder.
+# Default: transformer_outputs
+transformer_out: transformer_outputs
+
+# Final DeepRelaxo output folder.
+# Default: deeprelaxo_outputs
+deeprelaxo_out: deeprelaxo_outputs
+
+# --- Runtime ---
+# Estimator batch size. Increase for speed if GPU memory allows.
+# Default: 50000
+transformer_batch_size: 50000
+
+# Notes:
+# - Checkpoints are fixed by the code and loaded from:
+#   checkpoints/transformer_mlp_epoch_80.pth
+#   checkpoints/unet3d_epoch_140.pth
+# - Saved outputs will be:
+#   transformer_outputs/R2s_transformer_mlp.nii
+#   deeprelaxo_outputs/R2s_deeprelaxo.nii
