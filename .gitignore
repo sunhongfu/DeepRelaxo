@@ -1,0 +1,12 @@
+
+*.out
+*.asv
+*.swp
+*.DS_Store
+*.pyc
+
+
+.claude
+
+checkpoints
+demo
