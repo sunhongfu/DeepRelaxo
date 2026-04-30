@@ -56,7 +56,6 @@ def main():
     parser.add_argument('--data_dir')
     parser.add_argument('--echo_files', nargs='+')
     parser.add_argument('--echo_4d')
-    parser.add_argument('--variable')
     parser.add_argument('--te_ms', nargs='+', type=float)
     parser.add_argument('--mask')
     parser.add_argument('--bet_mask')
@@ -100,12 +99,9 @@ def main():
         else:
             echo_4d_config = config["echo_4d"]
             if isinstance(echo_4d_config, dict):
-                magnitude_4d_path = {
-                    "path": _resolve_path(data_dir, echo_4d_config["file"]),
-                    "variable": echo_4d_config.get("variable", echo_4d_config.get("key")),
-                }
+                magnitude_4d_path = {"path": _resolve_path(data_dir, echo_4d_config["file"])}
             else:
-                magnitude_4d_path = {"path": _resolve_path(data_dir, echo_4d_config), "variable": None}
+                magnitude_4d_path = {"path": _resolve_path(data_dir, echo_4d_config)}
             te_values_ms = config["te_ms"]
         transformer_out = _resolve_path(config_dir, config.get("transformer_out", "transformer_outputs"))
         deeprelaxo_out = _resolve_path(config_dir, config.get("deeprelaxo_out", "deeprelaxo_outputs"))
@@ -130,7 +126,7 @@ def main():
         if args.echo_4d is not None:
             if args.te_ms is None:
                 parser.error("when using --echo_4d, provide --te_ms")
-            magnitude_4d_path = {"path": _resolve_path(data_dir, args.echo_4d), "variable": args.variable}
+            magnitude_4d_path = {"path": _resolve_path(data_dir, args.echo_4d)}
             te_values_ms = args.te_ms
         elif args.echo_files is not None:
             if args.te_ms is None:
@@ -138,7 +134,7 @@ def main():
             if len(args.echo_files) != len(args.te_ms):
                 parser.error("--echo_files and --te_ms must have the same length")
             echoes = [
-                {"file": file_value, "te_ms": te_value, "variable": args.variable}
+                {"file": file_value, "te_ms": te_value}
                 for file_value, te_value in zip(args.echo_files, args.te_ms)
             ]
             magnitude_entries, te_values_ms = resolve_echo_entries(echoes, base_dir=data_dir)

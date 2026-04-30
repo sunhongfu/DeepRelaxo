@@ -52,10 +52,7 @@ def load_subject_data(magnitude_entries, bet_mask_path=None):
     first_affine = None
 
     for entry in magnitude_entries:
-        magnitude_array, affine = load_array_with_affine(
-            entry["path"],
-            variable=entry.get("variable"),
-        )
+        magnitude_array, affine = load_array_with_affine(entry["path"])
         if magnitude_array.ndim != 3:
             raise ValueError(
                 f"Expected a 3D magnitude volume in {entry['path']}, but got shape {magnitude_array.shape}"
@@ -64,6 +61,17 @@ def load_subject_data(magnitude_entries, bet_mask_path=None):
         if first_affine is None and affine is not None:
             first_affine = affine
 
+    shapes = [arr.shape for arr in magnitude_arrays]
+    if len(set(shapes)) > 1:
+        details = "\n".join(
+            f"    {Path(str(entry['path'])).name}: shape {arr.shape}"
+            for entry, arr in zip(magnitude_entries, magnitude_arrays)
+        )
+        raise ValueError(
+            "Magnitude echoes have mismatched volume dimensions — all echoes "
+            "must share the same shape. Detected:\n" + details
+        )
+
     mag_list = np.stack(magnitude_arrays, axis=-1)
     mask = load_mask_array(bet_mask_path, mag_list.shape[:3])
     masked_magnitudes = torch.from_numpy(mag_list[mask])
@@ -71,10 +79,7 @@ def load_subject_data(magnitude_entries, bet_mask_path=None):
 
 
 def load_subject_data_4d(magnitude_4d_entry, te_values_ms, bet_mask_path=None):
-    mag_list, affine = load_array_with_affine(
-        magnitude_4d_entry["path"],
-        variable=magnitude_4d_entry.get("variable"),
-    )
+    mag_list, affine = load_array_with_affine(magnitude_4d_entry["path"])
 
     if mag_list.ndim != 4:
         raise ValueError(

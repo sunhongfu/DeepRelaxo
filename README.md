@@ -36,7 +36,9 @@ cd DeepRelaxo
 
 ---
 
-### 2. Set up Python environment
+### 2. Install dependencies
+
+A fresh virtual environment is the recommended way — it isolates DeepRelaxo's dependencies from anything else on your system and avoids version conflicts.
 
 You need Python 3.10 or 3.11. Check your version:
 
@@ -62,43 +64,86 @@ venv\Scripts\activate
 
 You should see `(venv)` in your prompt. Run this activation command each time you open a new terminal.
 
----
+**Install PyTorch.** Go to [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/), select your OS and CUDA version, and copy the install command. For example:
 
-### 3. Install PyTorch
-
-Go to [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/), select your OS and CUDA version, and copy the install command. For example:
-
-**CUDA 12.4 (recommended if you have an NVIDIA GPU):**
+CUDA 12.4 (recommended if you have an NVIDIA GPU):
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 ```
 
-**CPU only (slower, but works without a GPU):**
+CPU only (slower, but works without a GPU):
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
+**Install remaining dependencies.** Pick one of the two options below depending on whether you want the browser-based web app:
+
+- **Web app + Command-Line** (recommended for most users):
+
+  ```bash
+  pip install -r requirements-webapp.txt
+  ```
+
+  Adds Gradio and Matplotlib for the browser UI and slice previews.
+
+- **Command-Line only** (lighter install, fewer dependencies, no web stack):
+
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+  Skips Gradio and its ~18 transitive packages (FastAPI, Pydantic, Uvicorn, etc.). Recommended for headless servers, HPC clusters, or environments where Gradio's deps conflict with other tools.
+
+<details>
+<summary><b>Already have PyTorch installed? Click here to skip the venv setup.</b></summary>
+
+If you have a working Python environment with PyTorch and prefer to reuse it, install one of the two requirements files above into that environment directly.
+
+Note: this may upgrade or downgrade other packages in the environment (e.g. `pydantic`, `typing-extensions`) and can conflict with unrelated tools like TensorFlow. A clean venv avoids this. The Command-Line only install is much less likely to cause conflicts since it doesn't pull in Gradio's dependency chain.
+
+</details>
+
 ---
 
-### 4. Install remaining dependencies
+### 3. Download checkpoints (and optionally demo data)
 
-```bash
-pip install -r requirements.txt
-```
+Large files (checkpoints and demo data) are excluded from git and hosted on Hugging Face: [sunhongfu/DeepRelaxo](https://huggingface.co/sunhongfu/DeepRelaxo/tree/main).
 
----
-
-### 5. Download checkpoints
+**Download checkpoints** (~350 MB, required, one-time):
 
 ```bash
 python run_deeprelaxo_pipeline.py --download-checkpoints
 ```
 
-Checkpoints are saved to `checkpoints/` (~350 MB total). This only needs to be done once.
+**Optional — download demo data.** If you'd like to try DeepRelaxo on a provided 5-echo GRE NIfTI dataset (TE = 4.9, 9.9, 14.8, 19.8, 24.7 ms) before adapting it to your own data, also run:
+
+```bash
+python run_deeprelaxo_pipeline.py --download-demo
+```
+
+This places sample magnitude echoes and a BET mask in `demo/`. See [Run Demo Examples](#run-demo-examples) below for how to run it.
+
+**Manual download (optional).** If the auto-download fails (e.g. behind a firewall), grab the files from the Hugging Face page above and place them as follows:
+
+```text
+DeepRelaxo/
+├── checkpoints/
+│   ├── transformer_mlp_epoch_80.pth
+│   └── unet3d_epoch_140.pth
+├── demo/
+│   ├── BET_mask.nii
+│   ├── mag1.nii
+│   ├── mag2.nii
+│   ├── mag3.nii
+│   ├── mag4.nii
+│   ├── mag5.nii
+│   └── params.json
+└── ...
+```
 
 ---
 
-### 6. Run
+### 4. Run
 
 Choose the web app (recommended) or the command-line interface.
 
@@ -119,14 +164,6 @@ Then open [http://localhost:7860](http://localhost:7860) in your browser.
 3. **Brain mask** — optionally upload a BET mask. If omitted, all voxels are processed.
 4. **Run Pipeline** — log output streams live. The Step 1 result (`R2s_transformer_mlp.nii`) is available to download as soon as it is ready, before Step 2 finishes.
 5. **Download** — the final output (`R2s_deeprelaxo.nii`) appears in the Result panel when complete.
-
-To try with the included demo data, first download it:
-
-```bash
-python run_deeprelaxo_pipeline.py --download-demo
-```
-
-Then click **Load Demo Data** in the app to pre-fill all inputs, and hit **Run Pipeline**.
 
 ---
 
@@ -166,7 +203,7 @@ te_ms: [4.9, 9.9, 14.8]
 mask: BET_mask.nii
 ```
 
-### Direct CLI
+### Direct Command-Line
 
 Multiple 3D NIfTI echoes:
 
@@ -195,7 +232,6 @@ python run_deeprelaxo_pipeline.py \
   --data_dir Data/your_subject \
   --echo_files mag1.mat mag2.mat mag3.mat \
   --te_ms 4.9 9.9 14.8 \
-  --variable magnitude \
   --mask BET_mask.nii
 ```
 
@@ -205,12 +241,11 @@ MATLAB 4D:
 python run_deeprelaxo_pipeline.py \
   --data_dir Data/your_subject \
   --echo_4d magnitudes_4d.mat \
-  --variable magnitudes \
   --te_ms 4.9 9.9 14.8 19.8 24.7 \
   --mask BET_mask.nii
 ```
 
-For MATLAB inputs, `variable` selects the array inside the `.mat` file. If omitted and the file contains exactly one usable array, it is selected automatically.
+`.mat` inputs (magnitudes or mask) must contain **a single numeric array** per file. If a `.mat` file contains multiple arrays, re-save it with only the array you want. The same applies to `.mat` masks.
 
 ### Config notes
 
@@ -222,30 +257,54 @@ For MATLAB inputs, `variable` selects the array inside the `.mat` file. If omitt
 
 ---
 
-## Data and Checkpoints
+## Run Demo Examples
 
-Large files (checkpoints, demo data, inference outputs) are excluded from git. Download them with:
+Once you've downloaded the demo data (see step 3 of the Quick Start), you can run it in any of the following ways. The demo is a 5-echo GRE acquisition with TE = 4.9, 9.9, 14.8, 19.8, 24.7 ms.
+
+### Option 1 — Web app (one click)
+
+Launch the web app:
 
 ```bash
-python run_deeprelaxo_pipeline.py --download-checkpoints
-python run_deeprelaxo_pipeline.py --download-demo
+python app.py
 ```
 
-Manual download: [https://huggingface.co/sunhongfu/DeepRelaxo/tree/main](https://huggingface.co/sunhongfu/DeepRelaxo/tree/main)
+Open [http://localhost:7860](http://localhost:7860), click **Load Demo Data** to pre-fill all inputs (echoes, TEs, mask), then hit **Run Pipeline**.
 
-Place files as follows:
+### Option 2 — Command-line with direct arguments
 
-```text
-DeepRelaxo/
-├── checkpoints/
-│   ├── transformer_mlp_epoch_80.pth
-│   └── unet3d_epoch_140.pth
-├── demo/
-│   ├── BET_mask.nii
-│   ├── mag1.nii
-│   ├── mag2.nii
-│   ├── mag3.nii
-│   ├── mag4.nii
-│   └── mag5.nii
-└── ...
+```bash
+python run_deeprelaxo_pipeline.py \
+  --data_dir demo \
+  --echo_files mag1.nii mag2.nii mag3.nii mag4.nii mag5.nii \
+  --te_ms 4.9 9.9 14.8 19.8 24.7 \
+  --mask BET_mask.nii
 ```
+
+### Option 3 — Command-line with a YAML config
+
+Save the following as `demo_config.yaml`:
+
+```yaml
+data_dir: demo
+echoes:
+  - file: mag1.nii
+    te_ms: 4.9
+  - file: mag2.nii
+    te_ms: 9.9
+  - file: mag3.nii
+    te_ms: 14.8
+  - file: mag4.nii
+    te_ms: 19.8
+  - file: mag5.nii
+    te_ms: 24.7
+mask: BET_mask.nii
+```
+
+Then run:
+
+```bash
+python run_deeprelaxo_pipeline.py --config demo_config.yaml
+```
+
+All three options produce the same outputs: a Step 1 R2* map (`R2s_transformer_mlp.nii`) and a final denoised R2* map (`R2s_deeprelaxo.nii`).
