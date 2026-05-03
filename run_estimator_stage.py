@@ -127,26 +127,35 @@ def estimate_r2s(
     checkpoint_path=None,
     batch_size=BATCH_SIZE,
 ):
+    import gc
     model = load_model(checkpoint_path)
-    te_values_ms = torch.as_tensor(te_values_ms, dtype=torch.float32)
-    if (magnitude_entries is None) == (magnitude_4d_path is None):
-        raise ValueError("Provide exactly one of magnitude_entries or magnitude_4d_path")
+    try:
+        te_values_ms = torch.as_tensor(te_values_ms, dtype=torch.float32)
+        if (magnitude_entries is None) == (magnitude_4d_path is None):
+            raise ValueError("Provide exactly one of magnitude_entries or magnitude_4d_path")
 
-    if magnitude_entries is not None:
-        affine, mask, magnitudes = load_subject_data(magnitude_entries, bet_mask_path=bet_mask_path)
-    else:
-        affine, mask, magnitudes = load_subject_data_4d(
-            magnitude_4d_path,
-            te_values_ms,
-            bet_mask_path=bet_mask_path,
-        )
+        if magnitude_entries is not None:
+            affine, mask, magnitudes = load_subject_data(magnitude_entries, bet_mask_path=bet_mask_path)
+        else:
+            affine, mask, magnitudes = load_subject_data_4d(
+                magnitude_4d_path,
+                te_values_ms,
+                bet_mask_path=bet_mask_path,
+            )
 
-    results_r2s = batched_voxel_inference(model, magnitudes, te_values_ms, batch_size)
-    r2s_map = torch.zeros(mask.shape, dtype=torch.float32)
-    r2s_map[mask > 0] = results_r2s
-    r2s_map = torch.nan_to_num(r2s_map, nan=0.0, posinf=0.0, neginf=0.0)
+        results_r2s = batched_voxel_inference(model, magnitudes, te_values_ms, batch_size)
+        r2s_map = torch.zeros(mask.shape, dtype=torch.float32)
+        r2s_map[mask > 0] = results_r2s
+        r2s_map = torch.nan_to_num(r2s_map, nan=0.0, posinf=0.0, neginf=0.0)
 
-    return r2s_map, affine
+        return r2s_map, affine
+    finally:
+        # Release the on-GPU model and any cached CUDA memory so the same
+        # process can run again without GPU pressure piling up.
+        del model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def save_r2s(r2s_map, save_dir, affine):

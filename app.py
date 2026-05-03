@@ -280,6 +280,18 @@ def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size,
         print(traceback.format_exc())
         job["status"] = "error"
     finally:
+        # Defensive GPU cleanup — both stages already release on success,
+        # but if something raised partway we still want a clean slate so
+        # the next run doesn't see accumulated CUDA memory.
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
+        except Exception:
+            pass
         sys.stdout = orig
         log_q.put(None)
 

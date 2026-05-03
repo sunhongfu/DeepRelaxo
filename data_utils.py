@@ -15,13 +15,20 @@ def _load_mat_array(path):
             for name, value in mat_data.items()
             if not name.startswith("__") and np.issubdtype(np.asarray(value).dtype, np.number)
         ]
-    except NotImplementedError:
+    except (NotImplementedError, ValueError):
+        # NotImplementedError → MATLAB v7.3 (HDF5-backed) — scipy can't read.
+        # ValueError → other unrecognised format. Fall through to h5py.
         candidates = []
 
     if not candidates:
+        # v7.3 .mat files are HDF5. MATLAB writes the dataset column-major
+        # but h5py reads it row-major, so the dimensions come out reversed
+        # (e.g. (256, 128, 70, 13) becomes (13, 70, 128, 256)). Transpose
+        # to restore the logical MATLAB shape — matches scipy.io.loadmat's
+        # behaviour on v5 files.
         with h5py.File(path, "r") as handle:
             candidates = [
-                (name, np.asarray(dataset))
+                (name, np.asarray(dataset).T)
                 for name, dataset in handle.items()
                 if isinstance(dataset, h5py.Dataset) and np.issubdtype(np.asarray(dataset).dtype, np.number)
             ]

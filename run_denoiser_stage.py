@@ -53,29 +53,39 @@ def unpad_image(img, pads):
 
 
 def unet_inference_batch(img_batch, mask, checkpoint_path=None):
+    import gc
     model = load_model(checkpoint_path)
-    padded_images = []
-    pads_list = []
+    x = pred = None
+    try:
+        padded_images = []
+        pads_list = []
 
-    for img_data in img_batch:
-        padded, pads = pad_image(img_data)
-        padded_images.append(padded)
-        pads_list.append(pads)
+        for img_data in img_batch:
+            padded, pads = pad_image(img_data)
+            padded_images.append(padded)
+            pads_list.append(pads)
 
-    x = torch.from_numpy(np.stack(padded_images)[:, np.newaxis]).float().to(device)
+        x = torch.from_numpy(np.stack(padded_images)[:, np.newaxis]).float().to(device)
 
-    with torch.inference_mode():
-        pred = model(x)
+        with torch.inference_mode():
+            pred = model(x)
 
-    outputs = pred.squeeze(1).cpu().numpy()
-    results = []
+        outputs = pred.squeeze(1).cpu().numpy()
+        results = []
 
-    for out, pads in zip(outputs, pads_list):
-        unpadded = unpad_image(out, pads)
-        unpadded[mask <= 0] = 0
-        results.append(unpadded)
+        for out, pads in zip(outputs, pads_list):
+            unpadded = unpad_image(out, pads)
+            unpadded[mask <= 0] = 0
+            results.append(unpadded)
 
-    return results
+        return results
+    finally:
+        # Release the model + GPU input/output tensors and clear the CUDA
+        # caching allocator so subsequent runs start with clean GPU memory.
+        del model, x, pred
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 # =========================

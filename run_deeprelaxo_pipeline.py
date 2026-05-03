@@ -56,6 +56,16 @@ def main():
     parser.add_argument('--data_dir')
     parser.add_argument('--echo_files', nargs='+')
     parser.add_argument('--echo_4d')
+    parser.add_argument(
+        '--dicom_dir',
+        help=(
+            'Folder of multi-echo GRE magnitude DICOMs. The folder is walked '
+            'recursively, magnitude images filtered, grouped by EchoTime, '
+            'sorted by ImagePositionPatient, and saved as one NIfTI per echo '
+            'in <transformer_out_parent>/dicom_converted_nii/. TE values are '
+            'auto-detected from headers (override with --te_ms if needed).'
+        ),
+    )
     parser.add_argument('--te_ms', nargs='+', type=float)
     parser.add_argument('--mask')
     parser.add_argument('--bet_mask')
@@ -120,10 +130,38 @@ def main():
         magnitude_entries = None
         magnitude_4d_path = None
 
-        if sum(option is not None for option in [args.echo_files, args.echo_4d]) > 1:
-            parser.error("use at most one of --echo_files or --echo_4d")
+        if sum(option is not None for option in
+               [args.echo_files, args.echo_4d, args.dicom_dir]) > 1:
+            parser.error("use at most one of --echo_files, --echo_4d, or --dicom_dir")
 
-        if args.echo_4d is not None:
+        if args.dicom_dir is not None:
+            from data_utils import load_dicom_files
+            dicom_path = Path(args.dicom_dir).resolve()
+            if not dicom_path.is_dir():
+                parser.error(f"--dicom_dir is not a directory: {dicom_path}")
+            file_list = [str(p) for p in dicom_path.rglob("*") if p.is_file()]
+            if not file_list:
+                parser.error(f"--dicom_dir contains no files: {dicom_path}")
+            nii_out_dir = transformer_out.parent / "dicom_converted_nii"
+            print(f"Parsing DICOMs from {dicom_path}")
+            print(f"Writing converted NIfTI files to {nii_out_dir}")
+            echoes = load_dicom_files(file_list, nii_out_dir)
+            print(f"Parsed {len(echoes)} echoes from DICOM:")
+            for i, e in enumerate(echoes, 1):
+                print(f"  Echo {i}:  {e['nifti_path'].name}  "
+                      f"TE = {e['te_ms']:g} ms   shape {e['shape']}")
+            magnitude_entries = [{"path": str(e["nifti_path"])} for e in echoes]
+            if args.te_ms is not None:
+                if len(args.te_ms) != len(echoes):
+                    parser.error(
+                        f"--te_ms count ({len(args.te_ms)}) doesn't match the number "
+                        f"of parsed echoes ({len(echoes)})"
+                    )
+                te_values_ms = args.te_ms
+                print(f"Using user-supplied TEs: {te_values_ms}")
+            else:
+                te_values_ms = [e["te_ms"] for e in echoes]
+        elif args.echo_4d is not None:
             if args.te_ms is None:
                 parser.error("when using --echo_4d, provide --te_ms")
             magnitude_4d_path = {"path": _resolve_path(data_dir, args.echo_4d)}
@@ -140,7 +178,8 @@ def main():
             magnitude_entries, te_values_ms = resolve_echo_entries(echoes, base_dir=data_dir)
         else:
             parser.error(
-                "when using direct CLI, provide either --echo_files with --te_ms or --echo_4d with --te_ms"
+                "when using direct CLI, provide one of: "
+                "--dicom_dir, --echo_files with --te_ms, or --echo_4d with --te_ms"
             )
 
     print("\n==============================")
