@@ -159,8 +159,10 @@ Then open [http://localhost:7860](http://localhost:7860) in your browser.
 
 ### Usage
 
-1. **Upload echo files** — click *Upload Echo Files* to select magnitude images. You can repeat this to add files from different folders. Files are automatically sorted in natural numeric order (e.g. mag1, mag2, …, mag10). Confirm the processing order before running.
-2. **Set echo times** — enter *First TE* and *Echo Spacing*, then click *Fill Echo Times ↓* to populate the TE field. For irregular echo spacings, type the comma-separated values directly.
+1. **Provide magnitudes** — choose one of:
+   - **NIfTI / MAT** (Magnitudes section): upload one 3D file per echo, or a single 4D volume. Files are auto-sorted in natural numeric order (e.g. mag1, mag2, …, mag10) — confirm the processing order before running.
+   - **DICOM Folder** (alternative): drop a folder of multi-echo GRE magnitude DICOMs. The app reads DICOM headers to auto-group by `EchoTime`, sort each echo by `ImagePositionPatient`, and auto-fill the TE field. Files can have any extension (`.dcm`, `.ima`, `.dicom`, or none) and need not be pre-sorted. Phase / real / imaginary images are filtered out automatically; mixed acquisitions or single-echo folders are rejected with a clear message.
+2. **Set echo times** — enter *First TE* and *Echo Spacing*, then click *Fill Echo Times ↓* to populate the TE field. For irregular echo spacings, type the comma-separated values directly. (Auto-filled when using DICOM input.)
 3. **Brain mask** — optionally upload a BET mask. If omitted, all voxels are processed.
 4. **Run Pipeline** — log output streams live. The Step 1 result (`R2s_transformer_mlp.nii`) is available to download as soon as it is ready, before Step 2 finishes.
 5. **Download** — the final output (`R2s_deeprelaxo.nii`) appears in the Result panel when complete.
@@ -250,7 +252,8 @@ python run_deeprelaxo_pipeline.py \
 ### Config notes
 
 - `data_dir`, `transformer_out`, and `deeprelaxo_out` are resolved relative to the config file.
-- Echo file paths are resolved relative to `data_dir`.
+- Echo file and mask paths are resolved relative to `data_dir`. **Absolute paths are kept verbatim** (so you can mix files from different folders).
+- `--data_dir` is **optional in direct CLI mode** — defaults to the current working directory if omitted.
 - If `mask` is omitted, an all-ones mask is used.
 - Default `transformer_batch_size` is `50000`; reduce if GPU memory is limited.
 - Checkpoints are loaded from `checkpoints/transformer_mlp_epoch_80.pth` and `checkpoints/unet3d_epoch_140.pth`.

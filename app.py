@@ -47,6 +47,38 @@ def _natural_key(f):
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r"(\d+)", _to_path(f).name)]
 
 
+_RED_WAIT = (
+    "<span style='color: #dc2626; font-weight: 700; font-size: 1.05em;'>{msg}</span>"
+)
+
+
+def _parse_te_input(s):
+    """Accept either 'TE1, TE2, TE3, ...' or compact 'first:spacing:count'."""
+    s = (s or "").strip()
+    if not s:
+        return []
+    if ":" in s and "," not in s:
+        parts = [p.strip() for p in s.split(":")]
+        if len(parts) != 3:
+            raise ValueError(
+                "TE compact form must be 'first_TE : spacing : count' "
+                f"(got {len(parts)} parts in '{s}')"
+            )
+        try:
+            first = float(parts[0])
+            spacing = float(parts[1])
+            n = int(parts[2])
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid number in TE compact form '{s}'. "
+                "Use 'first_TE : spacing : count' (e.g. '4.9 : 5 : 5')."
+            ) from exc
+        if n < 1:
+            raise ValueError(f"TE count must be ≥ 1 (got {n})")
+        return [round(first + i * spacing, 6) for i in range(n)]
+    return [float(t.strip()) for t in s.split(",") if t.strip()]
+
+
 def _to_path(f):
     if f is None:
         return None
@@ -62,6 +94,73 @@ def _to_path(f):
 @lru_cache(maxsize=8)
 def _volume_array(nii_path):
     return nib.load(str(nii_path)).get_fdata().astype(np.float32)
+
+
+@lru_cache(maxsize=128)
+def _file_shape(path_str):
+    """Return the volume shape of a NIfTI/MAT file, or None on failure.
+
+    NIfTI shape is read from the header (lazy, fast). MAT requires loading
+    the array. Cached so repeated UI renders don't re-read the file.
+    """
+    p = Path(path_str)
+    if not p.exists():
+        return None
+    try:
+        name = p.name.lower()
+        if name.endswith(".nii") or name.endswith(".nii.gz"):
+            return tuple(nib.load(str(p)).shape)
+        from data_utils import load_array_with_affine
+        arr, _ = load_array_with_affine(p)
+        return tuple(arr.shape)
+    except Exception:
+        return None
+
+
+def _shape_summary(paths):
+    """Markdown summary that shows per-file shapes so the user can verify each one.
+
+    - 0 files → empty
+    - 1 file → "Shape: A × B × C"
+    - many files → header line (matched / mismatched / unreadable) + per-file list
+    """
+    if not paths:
+        return ""
+    paths = list(paths)
+    items = [(Path(p).name, _file_shape(p)) for p in paths]
+    n = len(paths)
+    unreadable = [name for name, s in items if s is None]
+    unique_shapes = {s for _, s in items if s is not None}
+
+    def _fmt(s):
+        return " × ".join(str(d) for d in s)
+
+    if n == 1:
+        name, shape = items[0]
+        if shape:
+            return f"&nbsp;&nbsp;**Shape:** {_fmt(shape)}"
+        return f"&nbsp;&nbsp;`{name}` *(shape could not be read)*"
+
+    # Multi-file: always list per-file shapes for transparency.
+    if not unreadable and len(unique_shapes) == 1:
+        header = (
+            f"**{n} files** &nbsp;·&nbsp; "
+            f"all matching shape **{_fmt(next(iter(unique_shapes)))}** ✓"
+        )
+    elif len(unique_shapes) > 1:
+        header = (
+            f"**{n} files** &nbsp;·&nbsp; "
+            f"⚠️ **mismatched shapes** — all files must share the same volume dimensions"
+        )
+    else:
+        header = (
+            f"**{n} files** &nbsp;·&nbsp; "
+            f"⚠️ {len(unreadable)} could not be read"
+        )
+    lines = [header, ""]
+    for name, s in items:
+        lines.append(f"- `{name}` — {_fmt(s) if s else '*(could not read)*'}")
+    return "\n".join(lines)
 
 
 def _make_slice_image(nii_path, slice_idx=None, vmin=0, vmax=100):
@@ -97,20 +196,19 @@ def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size
     print(f"TE values (ms)  : {', '.join(str(t) for t in te_list)}")
     print(f"Brain mask      : {Path(mask_path).name if mask_path else '(none — all voxels processed)'}")
     print(f"Batch size      : {batch_size}")
-    print(f"Staging dir     : {work_dir}")
+    print(f"Working dir     : {work_dir}")
+    # The pipeline copies all inputs into work_dir, so the equivalent CLI
+    # invocation uses --data_dir = work_dir + bare filenames (resolved
+    # relative to data_dir by run_deeprelaxo_pipeline.py).
     cmd = ["python run_deeprelaxo_pipeline.py"]
+    cmd.append(f"--data_dir {work_dir}")
     if mode == "4d":
-        echo_4d_cli = orig_echo_paths[0] if orig_echo_paths else str(echo_paths[0])
-        cmd.append(f"--data_dir {Path(echo_4d_cli).parent}")
-        cmd.append(f"--echo_4d {echo_4d_cli}")
+        cmd.append(f"--echo_4d {Path(echo_paths[0]).name}")
     else:
-        cli_echo_paths = orig_echo_paths if orig_echo_paths else [str(p) for p in echo_paths]
-        cmd.append(f"--data_dir {Path(cli_echo_paths[0]).parent}")
-        cmd.append("--echo_files " + " ".join(cli_echo_paths))
+        cmd.append("--echo_files " + " ".join(Path(p).name for p in echo_paths))
     cmd.append("--te_ms " + " ".join(str(t) for t in te_list))
     if mask_path:
-        mask_cli = orig_mask_path if orig_mask_path else str(mask_path)
-        cmd.append(f"--mask {mask_cli}")
+        cmd.append(f"--mask {Path(mask_path).name}")
     cmd.append(f"--transformer_batch_size {batch_size}")
     _sep = "-" * 56
     print()
@@ -203,6 +301,21 @@ def _state_and_slider_update(job):
     return state, slider
 
 
+def _visibility_updates(job):
+    return (
+        gr.update(visible=True),  # log_group — always visible while running
+        gr.update(visible=bool(_result_files(job))),  # results_group
+        gr.update(visible=bool(job.get("step1_image"))),  # viz_group
+    )
+
+
+def _result_info_md(job):
+    files = _result_files(job)
+    if not files:
+        return ""
+    return _shape_summary(files)
+
+
 def _stream_job(job):
     log = ""
     while True:
@@ -211,16 +324,34 @@ def _stream_job(job):
             break
         log += msg + "\n"
         state, slider = _state_and_slider_update(job)
-        yield (log, _result_files(job), job.get("step1_image"),
-               job.get("result_image"), state, slider)
+        log_v, res_v, viz_v = _visibility_updates(job)
+        yield (log, _result_files(job), _result_info_md(job),
+               job.get("step1_image"), job.get("result_image"),
+               state, slider, log_v, res_v, viz_v)
     state, slider = _state_and_slider_update(job)
-    yield (log, _result_files(job), job.get("step1_image"),
-           job.get("result_image"), state, slider)
+    log_v, res_v, viz_v = _visibility_updates(job)
+    yield (log, _result_files(job), _result_info_md(job),
+           job.get("step1_image"), job.get("result_image"),
+           state, slider, log_v, res_v, viz_v)
 
 
 def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
-    _noop = (None, None, None, (None, None), gr.update())
-    te_list = [float(t.strip()) for t in te_ms_str.split(",") if t.strip()]
+    _noop = (
+        None,           # result_file
+        "",             # result_info
+        None,           # img_step1
+        None,           # img_step2
+        (None, None),   # output_state
+        gr.update(),    # slice_slider
+        gr.update(visible=True),   # log_group — show error message
+        gr.update(visible=False),  # results_group
+        gr.update(visible=False),  # viz_group
+    )
+    try:
+        te_list = _parse_te_input(te_ms_str)
+    except ValueError as exc:
+        yield (f"❌ {exc}", *_noop)
+        return
     if not te_list:
         yield ("❌ Enter echo times (ms)", *_noop)
         return
@@ -300,29 +431,261 @@ def _detect_echoes(paths):
 
 
 CUSTOM_CSS = """
+/* ── Global type scale — bump body / labels / info text for comfort ── */
+.gradio-container {
+    --text-xxs: 12px;
+    --text-xs: 13px;
+    --text-sm: 15px;
+    --text-md: 17px;
+    --text-lg: 19px;
+    --text-xl: 22px;
+    --text-xxl: 26px;
+    --block-info-text-size: 15px;
+    --block-label-text-size: 16px;
+    --block-title-text-size: 18px;
+    --section-text-size: 17px;
+    font-size: 17px !important;
+    line-height: 1.55 !important;
+}
+.gradio-container .prose,
+.gradio-container .prose p,
+.gradio-container .prose li,
+.gradio-container .markdown,
+.gradio-container .markdown p {
+    font-size: 17px !important;
+    line-height: 1.6 !important;
+}
+.gradio-container input,
+.gradio-container textarea,
+.gradio-container select {
+    font-size: 16px !important;
+}
+.gradio-container button {
+    font-size: 16px !important;
+}
+
 /* Section titles — coloured for quick scanning */
 .gradio-container h3 {
-    padding-left: 12px !important;
+    font-size: 1.4rem !important;
+    padding: 4px 0 6px 14px !important;
     color: #1d4ed8 !important;
-    border-left: 4px solid #1d4ed8 !important;
-    margin-left: 4px !important;
+    border-left: 5px solid #1d4ed8 !important;
+    margin: 8px 0 14px 4px !important;
 }
 .dark .gradio-container h3 {
     color: #60a5fa !important;
     border-left-color: #60a5fa !important;
 }
 
-/* Section panels — thicker, more visible borders */
-.dr-section {
-    margin-bottom: 16px !important;
+/* Accordion label — match the h3 section heading style */
+.dr-accordion > .label-wrap,
+.dr-accordion > div > .label-wrap,
+.dr-accordion button.label-wrap,
+.dr-accordion > .label-wrap span,
+.dr-accordion button.label-wrap span {
+    font-size: 1.4rem !important;
+    font-weight: 600 !important;
+    color: #1d4ed8 !important;
+}
+.dr-accordion > .label-wrap,
+.dr-accordion > div > .label-wrap,
+.dr-accordion button.label-wrap {
+    border-left: 5px solid #1d4ed8 !important;
+    padding: 6px 0 6px 14px !important;
+    margin: 4px 0 8px 4px !important;
+    background: transparent !important;
+}
+.dark .dr-accordion > .label-wrap,
+.dark .dr-accordion > div > .label-wrap,
+.dark .dr-accordion button.label-wrap,
+.dark .dr-accordion > .label-wrap span,
+.dark .dr-accordion button.label-wrap span {
+    color: #60a5fa !important;
+    border-left-color: #60a5fa !important;
+}
+
+/* Processing-Order — hide the upload drop zone (we don't accept uploads here)
+   and the top-level "clear all" toolbar X overlay. The per-file X
+   (.label-clear-button) sits inside .file-preview-holder for 2+ files; for
+   the 1-file case it isn't rendered at all by Gradio, so we provide an
+   explicit Clear Processing Order button below instead. */
+#dr-sorted-files .upload-container,
+#dr-sorted-files .wrap.svelte-12ioyct,
+#dr-sorted-files .upload-button,
+#dr-sorted-files button:has(svg.feather-upload),
+#dr-sorted-files .icon-button-wrapper.top-panel {
+    display: none !important;
+}
+/* Brain Mask — hide the native per-file X (label-clear-button) and the
+   top-level toolbar X. The explicit "✕ Remove Brain Mask" button below is
+   the canonical removal path; the native X was overlaying the download icon. */
+#dr-mask-file .label-clear-button,
+#dr-mask-file .icon-button-wrapper.top-panel {
+    display: none !important;
+}
+/* Explicit Remove buttons (Processing Order, Brain Mask) — full-width */
+#dr-clear-order-btn,
+#dr-clear-order-btn button,
+#dr-mask-clear-btn,
+#dr-mask-clear-btn button {
+    width: 100% !important;
+    margin-top: 4px !important;
+}
+
+/* Accordion expanded content — visually match the rest of the dr-sections.
+   Gradio gives the open panel its own background; force it transparent so
+   the parent dr-section's color/border carry through. */
+.dr-accordion,
+.dr-accordion > div,
+.dr-accordion > div > div,
+.dr-accordion .open,
+.dr-accordion .accordion-content,
+.dr-accordion > div:not(.label-wrap) {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+/* But keep the outer dr-section frame visible */
+.dr-section.dr-accordion {
+    background: var(--block-background-fill) !important;
     border: 2px solid #4b5563 !important;
-    border-radius: 8px !important;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
+}
+.dark .dr-section.dr-accordion {
+    border-color: #9ca3af !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
+}
+
+/* Section panels — more breathing room, thicker visible borders */
+.dr-section {
+    margin-bottom: 24px !important;
+    padding: 16px 20px !important;
+    border: 2px solid #4b5563 !important;
+    border-radius: 10px !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
     overflow: hidden !important;
 }
 .dark .dr-section {
     border-color: #9ca3af !important;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.30) !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
+}
+
+/* Markdown content inside sections — indent paragraphs / lists from the edge */
+.dr-section .prose,
+.dr-section .markdown,
+.dr-section .gradio-markdown {
+    padding: 0 6px !important;
+}
+.dr-section .prose p,
+.dr-section .markdown p {
+    margin: 6px 0 8px 0 !important;
+    padding-left: 4px !important;
+}
+.dr-section .prose ul,
+.dr-section .prose ol,
+.dr-section .markdown ul,
+.dr-section .markdown ol {
+    padding-left: 28px !important;
+    margin: 6px 0 8px 0 !important;
+}
+.dr-section .prose li,
+.dr-section .markdown li {
+    margin: 3px 0 !important;
+}
+
+/* Pull-quote / italic asides ("*Auto-filled when …*") */
+.dr-section em {
+    color: #6b7280 !important;
+}
+.dark .dr-section em {
+    color: #9ca3af !important;
+}
+
+/* Tab body content — match section padding */
+.dr-input-tabs .tab-nav + div,
+.dr-input-tabs > div > div:not(.tab-nav) {
+    padding: 14px 18px !important;
+}
+
+/* Run Pipeline — green CTA, large, full-width */
+#dr-run-btn,
+#dr-run-btn button {
+    background: #16a34a !important;
+    background-image: linear-gradient(180deg, #22c55e, #15803d) !important;
+    color: #ffffff !important;
+    border-color: #15803d !important;
+    font-size: 18px !important;
+    padding: 14px 28px !important;
+    font-weight: 700 !important;
+    width: 100% !important;
+}
+#dr-run-btn:hover,
+#dr-run-btn button:hover {
+    background: #15803d !important;
+    background-image: linear-gradient(180deg, #16a34a, #14532d) !important;
+    border-color: #14532d !important;
+}
+#dr-run-btn:active,
+#dr-run-btn button:active {
+    background: #14532d !important;
+}
+
+
+/* Input-method tabs — bigger and more comfortable */
+.dr-input-tabs button[role="tab"] {
+    font-size: 1.2rem !important;
+    font-weight: 600 !important;
+    padding: 20px 36px !important;
+    border: 2px solid #9ca3af !important;
+    border-bottom: 2px solid #4b5563 !important;
+    border-radius: 10px 10px 0 0 !important;
+    background: #e5e7eb !important;
+    color: #374151 !important;
+    margin-right: 8px !important;
+    opacity: 1 !important;
+    box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.08) inset !important;
+    transition: all 0.15s ease !important;
+}
+.dr-input-tabs button[role="tab"]:hover {
+    background: #d1d5db !important;
+    color: #111827 !important;
+    border-color: #6b7280 !important;
+}
+.dr-input-tabs button[role="tab"][aria-selected="true"] {
+    background: #1d4ed8 !important;
+    color: #ffffff !important;
+    border-color: #1d4ed8 !important;
+    border-bottom: 2px solid #1d4ed8 !important;
+    box-shadow: 0 -3px 8px rgba(29, 78, 216, 0.35) !important;
+    transform: translateY(-1px) !important;
+}
+.dark .dr-input-tabs button[role="tab"] {
+    background: #374151 !important;
+    color: #e5e7eb !important;
+    border-color: #6b7280 !important;
+    border-bottom-color: #9ca3af !important;
+    box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.08) inset !important;
+}
+.dark .dr-input-tabs button[role="tab"]:hover {
+    background: #4b5563 !important;
+    color: #ffffff !important;
+    border-color: #9ca3af !important;
+}
+.dark .dr-input-tabs button[role="tab"][aria-selected="true"] {
+    background: #60a5fa !important;
+    color: #0b1220 !important;
+    border-color: #60a5fa !important;
+    border-bottom-color: #60a5fa !important;
+    box-shadow: 0 -3px 8px rgba(96, 165, 250, 0.45) !important;
+}
+/* Suppress Gradio's default orange accent underline on the selected tab */
+.dr-input-tabs button[role="tab"]::after,
+.dr-input-tabs button[role="tab"]::before,
+.dr-input-tabs button[role="tab"][aria-selected="true"]::after,
+.dr-input-tabs button[role="tab"][aria-selected="true"]::before {
+    display: none !important;
+    content: none !important;
+    background: none !important;
 }
 
 /* Make secondary buttons look clearly clickable instead of blending in (light mode) */
@@ -390,160 +753,499 @@ with gr.Blocks(title="DeepRelaxo") as app:
 
     accumulated = gr.State([])
 
-    with gr.Row(equal_height=False):
+    with gr.Column():
+        # ── 1. MRI Magnitudes (tabs) ──────────────────────────
+        with gr.Accordion(
+            "MRI Magnitudes", open=True,
+            elem_classes=["dr-section", "dr-accordion"],
+        ):
+            gr.Markdown("Multi-echo GRE magnitude images. Pick one input method below.")
+            with gr.Tabs(elem_classes="dr-input-tabs"):
+                with gr.Tab("📁 DICOM Folder  (recommended)") as tab_dicom:
+                    gr.Markdown(
+                        "Pick the folder of multi-echo GRE **magnitude** DICOMs — echoes, "
+                        "TE values, and slice ordering are read from headers automatically."
+                    )
+                    dicom_input = gr.UploadButton(
+                        "📁  Select DICOM Folder",
+                        file_count="directory",
+                        variant="primary",
+                    )
+                    dicom_info = gr.Markdown("")
 
-        # ── Left column: inputs ──────────────────────────────────────
-        with gr.Column(scale=4):
-            # ── 1. Magnitudes ──────────────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Magnitudes  *(multiple 3D echoes OR a single 4D volume; .nii / .nii.gz / .mat)*")
-                magnitudes_input = gr.File(
-                    file_count="multiple",
+                with gr.Tab("📄 NIfTI / MAT files  (advanced)") as tab_nifti:
+                    gr.Markdown(
+                        "Pick pre-converted magnitudes — multiple 3D echoes (one file each) "
+                        "or a single 4D volume. Supported: `.nii`, `.nii.gz`, `.mat`. "
+                        "**You'll also need to enter Echo Times below.**"
+                    )
+                    magnitudes_input = gr.UploadButton(
+                        "📄  Add NIfTI / MAT Magnitudes",
+                        file_count="multiple",
+                        file_types=[".nii", ".nii.gz", ".mat"],
+                        variant="primary",
+                    )
+                    magnitudes_info = gr.Markdown("")
+
+        # ── 2. Processing Order ───────────────────────────────
+        with gr.Accordion(
+            "Processing Order", open=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ) as order_group:
+            gr.Markdown(
+                "Confirm the order before running. If the order looks wrong, "
+                "rename your files (natural numeric sort: `mag1`, `mag2`, …, `mag10`)."
+            )
+            sorted_files = gr.File(
+                file_count="multiple",
+                show_label=False,
+                interactive=True,
+                height=180,
+                elem_id="dr-sorted-files",
+            )
+            sorted_info = gr.Markdown("")
+            # Gradio's gr.File(file_count="multiple") doesn't render a per-file X
+            # when only one file is present. This explicit button is the escape
+            # hatch — also useful for clearing 2+ files in one click.
+            clear_order_btn = gr.Button(
+                "✕  Remove all magnitudes",
+                variant="stop",
+                visible=False,
+                elem_id="dr-clear-order-btn",
+            )
+
+        # ── 3. Echo Times ─────────────────────────────────────
+        with gr.Accordion(
+            "Echo Times (ms)", open=True,
+            elem_classes=["dr-section", "dr-accordion"],
+        ):
+            gr.Markdown(
+                "Two accepted formats:\n"
+                "- Comma-separated values — one per echo, irregular spacings allowed "
+                "(e.g. `2.4, 3.6, 9.2, 20.8`).\n"
+                "- Compact `first_TE : spacing : count` for uniform spacing "
+                "(e.g. `3.5 : 4.4 : 8` → `3.5, 7.9, 12.3, 16.7, 21.1, 25.5, 29.9, 34.3`).\n\n"
+                "*Auto-filled when you use the DICOM Folder tab.*"
+            )
+            te_ms = gr.Textbox(
+                show_label=False,
+                placeholder="e.g.  2.4, 3.6, 9.2, 20.8    or compact:  3.5 : 4.4 : 8",
+            )
+
+        # ── 4. Brain Mask ─────────────────────────────────────
+        with gr.Accordion(
+            "Brain Mask (optional)", open=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ) as mask_group:
+            gr.Markdown(
+                "Optional — if omitted, **all voxels are processed**, which is "
+                "significantly slower than processing only the masked brain-tissue region.\n\n"
+                "Supported: `.nii`, `.nii.gz`, `.mat`"
+            )
+            mask_button = gr.UploadButton(
+                "🧠  Select Brain Mask",
+                file_count="single",
+                file_types=[".nii", ".nii.gz", ".mat"],
+                variant="primary",
+            )
+            # Hidden file display — appears with per-file X + download icon
+            # only after a mask is uploaded (mirrors Processing Order).
+            mask_file = gr.File(
+                file_count="single",
+                show_label=False,
+                interactive=True,
+                visible=False,
+                elem_id="dr-mask-file",
+                height=70,
+            )
+            mask_info = gr.Markdown("")
+            # Explicit Remove button — same pattern as Clear Processing Order.
+            # Visible only when a mask is loaded.
+            mask_clear_btn = gr.Button(
+                "✕  Remove Brain Mask",
+                variant="stop",
+                visible=False,
+                elem_id="dr-mask-clear-btn",
+            )
+
+        # ── 5. Hyper-parameters (collapsed by default) ────────
+        with gr.Accordion(
+            "Hyper-parameters",
+            open=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ):
+            batch_size = gr.Number(
+                value=50000,
+                label="Voxel Batch Size (50,000)",
+                info="Reduce if you run out of GPU memory",
+            )
+
+        run_btn = gr.Button("Run Pipeline", variant="primary", elem_id="dr-run-btn")
+
+        # ── 5. Log ─────────────────────────────────────────────
+        with gr.Accordion(
+            "Log", open=True, visible=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ) as log_group:
+            log_out = gr.Textbox(show_label=False, lines=8, max_lines=20, interactive=False, autoscroll=True)
+
+        # ── 6. Results ─────────────────────────────────────────
+        with gr.Accordion(
+            "Results", open=True, visible=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ) as results_group:
+            gr.Markdown("Click the file size on the right to download.")
+            result_file = gr.File(show_label=False, file_count="multiple")
+            result_info = gr.Markdown("")
+
+        # ── 7. Visualisation ───────────────────────────────────
+        with gr.Accordion(
+            "Visualisation", open=True, visible=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ) as viz_group:
+            with gr.Row():
+                img_step1 = gr.Image(
+                    label="Step 1 — Transformer-MLP",
+                    show_download_button=False,
+                    show_fullscreen_button=False,
+                    height=420,
+                )
+                img_step2 = gr.Image(
+                    label="Step 2 — DeepRelaxo",
+                    show_download_button=False,
+                    show_fullscreen_button=False,
+                    height=420,
+                )
+            with gr.Row(equal_height=True):
+                prev_btn = gr.Button("◀ Prev", scale=1)
+                slice_slider = gr.Slider(
+                    minimum=0, maximum=0, value=0, step=1,
+                    label="Slice (Z)",
                     show_label=False,
-                    height=180,
+                    container=False,
+                    interactive=True,
+                    scale=8,
                 )
-                sorted_order = gr.Textbox(
-                    label="Processing order — confirm before running; rename your files if they aren't sorted correctly",
-                    interactive=False,
-                    placeholder="Upload files to see sorted order",
-                    lines=5,
-                    max_lines=15,
-                )
-                with gr.Row():
-                    clear_btn = gr.Button("Clear All", variant="stop")
-                    demo_btn = gr.Button("Load Demo Data", variant="secondary")
+                next_btn = gr.Button("Next ▶", scale=1)
+            with gr.Row():
+                vmin_input = gr.Number(value=0, label="Display window min (R2*, s⁻¹)", precision=2)
+                vmax_input = gr.Number(value=100, label="Display window max (R2*, s⁻¹)", precision=2)
+        output_state = gr.State((None, None))
 
-            # ── 2. Echo Times ──────────────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Echo Times")
-                with gr.Row():
-                    first_te = gr.Number(label="First TE (ms)", precision=2)
-                    echo_spacing = gr.Number(label="Echo Spacing (ms)", precision=2)
-                    n_echoes = gr.Number(label="Number of Echoes", precision=0, interactive=True)
-                fill_te_btn = gr.Button("Compute full train of echo times ↓", variant="secondary")
-                te_ms = gr.Textbox(
-                    label="Echo Times (ms)",
-                    placeholder="e.g. 4.9, 9.9, 14.8, 19.8, 24.7",
-                    info="Fill using the fields above (equal spacing), or type values directly for irregular echo times.",
-                )
+    def _sort_paths(paths):
+        return sorted(paths, key=lambda p: _natural_key(p))
 
-            # ── 3. Brain Mask ──────────────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Brain Mask  *(optional — if omitted, all voxels are processed)*")
-                mask_file = gr.File(
-                    file_count="single",
-                    show_label=False,
-                )
+    def _clear_btn_update(count):
+        return gr.update(visible=count >= 1)
 
-            # ── 4. Hyper-parameters ───────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Hyper-parameters")
-                batch_size = gr.Number(
-                    value=50000,
-                    label="Voxel Batch Size (50,000)",
-                    info="Reduce if you run out of GPU memory",
-                )
-
-            run_btn = gr.Button("Run Pipeline", variant="primary")
-
-        # ── Right column: log + result ───────────────────────────────
-        with gr.Column(scale=5):
-            # ── 5. Log ─────────────────────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Log")
-                log_out = gr.Textbox(show_label=False, lines=8, max_lines=20, interactive=False, autoscroll=True)
-
-            # ── 6. Results ─────────────────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Results  *(click the file size on the right to download)*")
-                result_file = gr.File(show_label=False, file_count="multiple")
-
-            # ── 7. Visualisation ───────────────────────────────────
-            with gr.Group(elem_classes="dr-section"):
-                gr.Markdown("### Visualisation")
-                with gr.Row():
-                    img_step1 = gr.Image(
-                        label="Step 1 — Transformer-MLP",
-                        show_download_button=False,
-                        show_fullscreen_button=False,
-                        height=420,
-                    )
-                    img_step2 = gr.Image(
-                        label="Step 2 — DeepRelaxo",
-                        show_download_button=False,
-                        show_fullscreen_button=False,
-                        height=420,
-                    )
-                with gr.Row(equal_height=True):
-                    prev_btn = gr.Button("◀ Prev", scale=1)
-                    slice_slider = gr.Slider(
-                        minimum=0, maximum=0, value=0, step=1,
-                        label="Slice (Z)",
-                        show_label=False,
-                        container=False,
-                        interactive=True,
-                        scale=8,
-                    )
-                    next_btn = gr.Button("Next ▶", scale=1)
-                with gr.Row():
-                    vmin_input = gr.Number(value=0, label="Display window min (R2*, s⁻¹)", precision=2)
-                    vmax_input = gr.Number(value=100, label="Display window max (R2*, s⁻¹)", precision=2)
-            output_state = gr.State((None, None))
-
-    def _format_order(paths):
-        if not paths:
-            return ""
-        sorted_paths = sorted(paths, key=lambda p: _natural_key(p))
-        entries = [f"{i+1}. {Path(p).name}" for i, p in enumerate(sorted_paths)]
-        n_cols = 4 if len(entries) > 5 else 1
-        col_width = max(len(e) for e in entries) + 3
-        rows = []
-        for i in range(0, len(entries), n_cols):
-            chunk = entries[i:i + n_cols]
-            rows.append("".join(e.ljust(col_width) for e in chunk).rstrip())
-        return "\n".join(rows)
-
-    def add_files(new_files, current):
+    def add_files(new_files, current, progress=gr.Progress()):
         if not new_files:
-            return current, _format_order(current), _detect_echoes(current), None
+            srt = _sort_paths(current) if current else []
+            return (current, srt or None, _shape_summary(srt), None, gr.update(), "",
+                    _clear_btn_update(len(srt)))
         files = new_files if isinstance(new_files, list) else [new_files]
-        new_paths = [str(_to_path(f)) for f in files]
+        progress(0.1, desc=f"Reading {len(files)} uploaded file(s)…")
+        accepted_exts = (".nii", ".nii.gz", ".mat")
+        new_paths = []
+        rejected = []
+        for f in files:
+            p = _to_path(f)
+            if p is None:
+                continue
+            name = p.name.lower()
+            if any(name.endswith(ext) for ext in accepted_exts):
+                new_paths.append(str(p))
+            else:
+                rejected.append(p.name)
+        if rejected:
+            gr.Warning(
+                "Ignored unsupported file(s): "
+                + ", ".join(rejected)
+                + ". Only .nii, .nii.gz and .mat files are accepted."
+            )
+        if not new_paths:
+            srt = _sort_paths(current) if current else []
+            return (
+                current, srt or None, _shape_summary(srt), None, gr.update(),
+                f"⚠️ No supported files in this upload (rejected: {', '.join(rejected)})." if rejected else "",
+                _clear_btn_update(len(srt)),
+            )
+        # Drop any DICOM-converted leftovers from the accumulated list — uploading
+        # via the NIfTI / MAT tab is treated as switching input source, not as
+        # appending to a previous DICOM run.
+        current = [p for p in current if not Path(p).name.startswith("dcm_converted_to_nii_e")]
+        progress(0.5, desc=f"Merging into list (existing {len(current)} + new {len(new_paths)})…")
         new_names = {Path(p).name for p in new_paths}
         kept = [p for p in current if Path(p).name not in new_names]
         updated = kept + new_paths
-        return updated, _format_order(updated), _detect_echoes(updated), None
+        srt = _sort_paths(updated)
+        progress(0.85, desc=f"Computing shape summary across {len(srt)} files…")
+        summary = _shape_summary(srt)
+        progress(1.0, desc="Done")
+        added_names = [Path(p).name for p in new_paths]
+        if len(added_names) == 1:
+            status = f"✅ Added file: `{added_names[0]}`"
+        else:
+            status = (
+                f"✅ Added {len(added_names)} files:\n\n"
+                + "\n".join(f"- `{n}`" for n in added_names)
+            )
+        return (updated, srt or None, summary, None, gr.update(open=True), status,
+                _clear_btn_update(len(srt)))
 
-    def clear_files():
-        return [], "", None, None
+    def parse_dicom(files, progress=gr.Progress()):
+        # Outputs: accumulated, sorted_files, sorted_info, te_ms,
+        # magnitudes_input, dicom_input, dicom_info, order_group, clear_order_btn
+        if not files:
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                None,
+                "",
+                gr.update(),
+                gr.update(),
+            )
+        raw_list = files if isinstance(files, list) else [files]
 
-    def compute_te_list(first_te, spacing, n):
-        if not first_te or not spacing or not n:
-            return gr.update()
-        tes = [round(first_te + i * spacing, 4) for i in range(int(n))]
-        return ", ".join(f"{t:g}" for t in tes)
+        progress(0.05, desc=f"Reading {len(raw_list)} upload entry(ies)…")
 
-    def load_demo():
-        demo_dir = REPO_ROOT / "demo"
-        if not (demo_dir / "mag1.nii").exists():
-            return [], "❌ Demo data not found.\nRun: python run_deeprelaxo_pipeline.py --download-demo", None, "", None
-        paths = [str(demo_dir / f"mag{i}.nii") for i in range(1, 6)]
-        mask = demo_dir / "BET_mask.nii"
-        mask_path = str(mask) if mask.exists() else None
-        return paths, _format_order(paths), len(paths), 4.9, 5.0, "4.9, 9.9, 14.8, 19.8, 24.7", mask_path
+        # Expand any directories that arrived as a single entry.
+        file_paths = []
+        for f in raw_list:
+            p = _to_path(f)
+            if p is None:
+                continue
+            if p.is_dir():
+                file_paths.extend(str(c) for c in p.rglob("*") if c.is_file())
+            elif p.exists():
+                file_paths.append(str(p))
 
+        if not file_paths:
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                None,
+                "❌ No readable files were found in the upload.",
+                gr.update(),
+                gr.update(),
+            )
+
+        if len(file_paths) == 1:
+            name = Path(file_paths[0]).name
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                None,
+                (
+                    f"⚠️ Only one file was uploaded (`{name}`).\n\n"
+                    f"DeepRelaxo needs the **entire folder** of multi-echo DICOMs "
+                    f"(≥ 2 echoes). It looks like you navigated into the folder and "
+                    f"selected a single file by mistake.\n\n"
+                    f"**How to fix:** in the OS folder dialog, click the folder name "
+                    f"**once** in the file list (or in the side pane) and confirm — "
+                    f"don't enter the folder and click a file inside."
+                ),
+                gr.update(),
+                gr.update(),
+            )
+
+        progress(0.25, desc=f"Parsing {len(file_paths)} DICOM files…")
+
+        work_dir = Path(tempfile.mkdtemp(prefix="deeprelaxo_dicom_"))
+        try:
+            from data_utils import load_dicom_files
+            echoes = load_dicom_files(file_paths, work_dir)
+        except Exception as exc:
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
+                None,
+                f"❌ DICOM parsing failed:\n{exc}",
+                gr.update(),
+                gr.update(),
+            )
+
+        progress(0.95, desc="Building summary…")
+
+        nifti_paths = [str(e["nifti_path"]) for e in echoes]
+        te_str = ", ".join(f"{e['te_ms']:g}" for e in echoes)
+        # Use <pre> so the column-aligned layout survives Markdown rendering
+        # (otherwise newlines and indentation get collapsed).
+        name_w = max(len(Path(e["nifti_path"]).name) for e in echoes) + 2
+        body_lines = [f"✅ Parsed {len(echoes)} echoes from DICOM:"]
+        for i, e in enumerate(echoes, 1):
+            fname = Path(e["nifti_path"]).name
+            body_lines.append(
+                f"  Echo {i}:  {fname.ljust(name_w)}TE = {e['te_ms']:g} ms     shape {e['shape']}"
+            )
+        body_lines.append("")
+        body_lines.append(f"NIfTI files written to: {work_dir}")
+        info = (
+            "<pre style='font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; "
+            "white-space: pre; margin: 0; line-height: 1.5;'>"
+            + "\n".join(body_lines)
+            + "</pre>"
+        )
+        srt = _sort_paths(nifti_paths)
+        progress(1.0, desc="Done")
+        return (
+            nifti_paths,                # accumulated state
+            srt,                         # sorted_files
+            _shape_summary(srt),         # sorted_info
+            te_str,                      # te_ms
+            None,                        # magnitudes_input — clear
+            None,                        # dicom_input — clear
+            info,                        # dicom_info
+            gr.update(open=True),        # order_group — auto-expand
+            _clear_btn_update(len(srt)), # clear_order_btn — show
+        )
+
+    def show_mask_info(mask, accumulated_paths):
+        if mask is None:
+            return ""
+        path = _to_path(mask)
+        if path is None or not path.exists():
+            return ""
+        try:
+            from data_utils import load_array_with_affine
+            arr, _ = load_array_with_affine(path)
+            mask_shape = tuple(arr.shape)
+            shape_str = " × ".join(str(s) for s in mask_shape)
+            base = (
+                f"&nbsp;&nbsp;**Loaded:** `{path.name}` &nbsp;·&nbsp; "
+                f"**Shape:** {shape_str} &nbsp;·&nbsp; **dtype:** `{arr.dtype}`"
+            )
+        except Exception as exc:
+            return f"⚠️ Could not read mask: {exc}"
+
+        # Compare against the magnitudes' spatial shape (first 3 dims for 4D).
+        if not accumulated_paths:
+            return base + " &nbsp;·&nbsp; *(load magnitudes to verify shape match)*"
+        mag_spatials = set()
+        for p in accumulated_paths:
+            s = _file_shape(p)
+            if s and len(s) >= 3:
+                mag_spatials.add(tuple(s[:3]))
+        if not mag_spatials:
+            return base
+        if len(mag_spatials) > 1:
+            return base + " &nbsp;·&nbsp; ⚠️ magnitudes have mismatched shapes — cannot compare"
+        expected = next(iter(mag_spatials))
+        mask_spatial = mask_shape[:3] if len(mask_shape) >= 3 else mask_shape
+        if mask_spatial == expected:
+            return base + " &nbsp;·&nbsp; ✓ **matches magnitudes**"
+        exp_str = " × ".join(str(s) for s in expected)
+        return (
+            base + f" &nbsp;·&nbsp; ⚠️ **does not match magnitudes** "
+            f"(expected {exp_str})"
+        )
+
+    def on_mask_upload(uploaded, accumulated_paths, progress=gr.Progress()):
+        if uploaded is None:
+            return gr.update(value=None, visible=False), "", gr.update(visible=False)
+        progress(0.3, desc="Reading mask file…")
+        info = show_mask_info(uploaded, accumulated_paths)
+        progress(1.0, desc="Done")
+        return gr.update(value=uploaded, visible=True), info, gr.update(visible=True)
+
+    # Surface a red "waiting" message immediately on click so remote users
+    # see something during the slow network upload phase. Note: if the user
+    # cancels the OS file picker, the message will linger until the next
+    # interaction — Gradio gives no cancel event we can hook.
+    mask_button.click(
+        lambda: _RED_WAIT.format(
+            msg="⏳ Waiting for mask selection / upload — info will appear once the file transfer completes…"
+        ),
+        outputs=mask_info,
+    )
+    mask_button.upload(
+        on_mask_upload,
+        inputs=[mask_button, accumulated],
+        outputs=[mask_file, mask_info, mask_clear_btn],
+    )
+
+    # When the value is cleared (X click or programmatic clear),
+    # hide the file display + clear button + wipe the info line.
+    def on_mask_change(value):
+        if value is None:
+            return gr.update(value=None, visible=False), "", gr.update(visible=False)
+        return gr.update(), gr.update(), gr.update()
+
+    mask_file.change(
+        on_mask_change,
+        inputs=mask_file,
+        outputs=[mask_file, mask_info, mask_clear_btn],
+    )
+    # Also explicitly handle the per-file X click via the .delete event,
+    # since some Gradio versions don't fire .change for that gesture.
+    mask_file.delete(
+        lambda: (gr.update(value=None, visible=False), "", gr.update(visible=False)),
+        outputs=[mask_file, mask_info, mask_clear_btn],
+    )
+
+    # Explicit Remove button — same pattern as Clear Processing Order.
+    mask_clear_btn.click(
+        lambda: (gr.update(value=None, visible=False), "", gr.update(visible=False)),
+        outputs=[mask_file, mask_info, mask_clear_btn],
+    )
+
+    def sync_after_remove(visible_files):
+        """User clicked X on a file row (only fires for ≥2-file display)."""
+        files = (visible_files if isinstance(visible_files, list)
+                 else ([] if visible_files is None else [visible_files]))
+        files = [f for f in files if f is not None]
+        if not files:
+            return [], None, "", gr.update(), _clear_btn_update(0)
+        paths = [str(_to_path(f)) for f in files]
+        return paths, paths, _shape_summary(paths), gr.update(open=True), _clear_btn_update(len(paths))
+
+    sorted_files.change(
+        sync_after_remove,
+        inputs=[sorted_files],
+        outputs=[accumulated, sorted_files, sorted_info, order_group, clear_order_btn],
+    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
+    sorted_files.delete(
+        sync_after_remove,
+        inputs=[sorted_files],
+        outputs=[accumulated, sorted_files, sorted_info, order_group, clear_order_btn],
+    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
+
+    # Explicit "Clear Processing Order" button — needed because gr.File
+    # doesn't render a per-file X for the single-file display state.
+    def on_clear_order():
+        return [], None, "", gr.update(), _clear_btn_update(0)
+
+    clear_order_btn.click(
+        on_clear_order,
+        outputs=[accumulated, sorted_files, sorted_info, order_group, clear_order_btn],
+    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
+
+    magnitudes_input.click(
+        lambda: _RED_WAIT.format(
+            msg="⏳ Waiting for file selection / upload — Processing Order will populate once the file transfer completes…"
+        ),
+        outputs=magnitudes_info,
+    )
     magnitudes_input.upload(
         add_files,
         inputs=[magnitudes_input, accumulated],
-        outputs=[accumulated, sorted_order, n_echoes, magnitudes_input],
+        outputs=[accumulated, sorted_files, sorted_info, magnitudes_input,
+                 order_group, magnitudes_info, clear_order_btn],
+    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
+    dicom_input.click(
+        lambda: _RED_WAIT.format(
+            msg="⏳ Waiting for folder selection / upload — parsing will start once the file transfer completes…"
+        ),
+        outputs=dicom_info,
     )
-    clear_btn.click(clear_files, outputs=[accumulated, sorted_order, n_echoes, magnitudes_input])
-    fill_te_btn.click(compute_te_list, inputs=[first_te, echo_spacing, n_echoes], outputs=te_ms)
-    demo_btn.click(load_demo, outputs=[accumulated, sorted_order, n_echoes, first_te, echo_spacing, te_ms, mask_file])
+    dicom_input.upload(
+        parse_dicom,
+        inputs=[dicom_input],
+        outputs=[accumulated, sorted_files, sorted_info, te_ms,
+                 magnitudes_input, dicom_input, dicom_info, order_group, clear_order_btn],
+    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
 
     run_btn.click(
         run_pipeline,
         inputs=[accumulated, te_ms, mask_file, batch_size, vmin_input, vmax_input],
-        outputs=[log_out, result_file, img_step1, img_step2, output_state, slice_slider],
+        outputs=[log_out, result_file, result_info, img_step1, img_step2,
+                 output_state, slice_slider, log_group, results_group, viz_group],
     )
 
     def render_slice(state, idx, vmin, vmax):
@@ -577,5 +1279,42 @@ with gr.Blocks(title="DeepRelaxo") as app:
         outputs=[img_step1, img_step2],
     )
 
+def _find_free_port(preferred=7860, max_tries=20, host="127.0.0.1"):
+    import socket
+    for offset in range(max_tries):
+        port = preferred + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(
+        f"No free port found in range {preferred}–{preferred + max_tries - 1}"
+    )
+
+
 if __name__ == "__main__":
-    app.launch(server_name="127.0.0.1", server_port=7860)
+    host = "127.0.0.1"
+    port = _find_free_port(7860, host=host)
+    if port != 7860:
+        print(f"⚠️  Port 7860 is in use — falling back to {port}")
+
+    # Auto-open the browser at the dark-themed URL once the server is up.
+    # We poll the port instead of fixed-sleeping so the browser doesn't
+    # arrive before Gradio is listening.
+    import webbrowser, socket, threading, time
+
+    def _open_when_ready():
+        url = f"http://{host}:{port}/?__theme=dark"
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.3)
+                if s.connect_ex((host, port)) == 0:
+                    webbrowser.open(url)
+                    return
+            time.sleep(0.2)
+
+    threading.Thread(target=_open_when_ready, daemon=True).start()
+    app.launch(server_name=host, server_port=port)

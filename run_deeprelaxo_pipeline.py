@@ -108,10 +108,10 @@ def main():
         bet_mask = _resolve_path(data_dir, config.get("mask", config.get("bet_mask")))
         transformer_batch_size = int(config.get("transformer_batch_size", 50000))
     else:
-        if not args.data_dir:
-            parser.error("provide either --config or --data_dir")
-
-        data_dir = Path(args.data_dir)
+        # data_dir is optional in CLI mode — defaults to current working directory.
+        # Relative paths in --echo_files / --echo_4d / --mask are resolved against
+        # it; absolute paths bypass it.
+        data_dir = Path(args.data_dir) if args.data_dir else Path.cwd()
         mask_value = args.mask if args.mask is not None else args.bet_mask
         bet_mask = _resolve_path(data_dir, mask_value)
         transformer_out = _resolve_path(Path.cwd(), args.transformer_out or "transformer_outputs")
