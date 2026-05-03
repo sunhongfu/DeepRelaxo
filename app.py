@@ -81,7 +81,8 @@ def _make_slice_image(nii_path, slice_idx=None, vmin=0, vmax=100):
     return tmp.name
 
 
-def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size):
+def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size,
+                      orig_echo_paths=None, orig_mask_path=None):
     print("============================")
     print("RUN CONFIGURATION")
     print("============================")
@@ -97,23 +98,32 @@ def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size
     print(f"Brain mask      : {Path(mask_path).name if mask_path else '(none — all voxels processed)'}")
     print(f"Batch size      : {batch_size}")
     print(f"Staging dir     : {work_dir}")
-    print()
-    print("Equivalent command-line invocation:")
     cmd = ["python run_deeprelaxo_pipeline.py"]
-    cmd.append(f"--data_dir {work_dir}")
     if mode == "4d":
-        cmd.append(f"--echo_4d {Path(echo_paths[0]).name}")
+        echo_4d_cli = orig_echo_paths[0] if orig_echo_paths else str(echo_paths[0])
+        cmd.append(f"--data_dir {Path(echo_4d_cli).parent}")
+        cmd.append(f"--echo_4d {echo_4d_cli}")
     else:
-        cmd.append("--echo_files " + " ".join(Path(p).name for p in echo_paths))
+        cli_echo_paths = orig_echo_paths if orig_echo_paths else [str(p) for p in echo_paths]
+        cmd.append(f"--data_dir {Path(cli_echo_paths[0]).parent}")
+        cmd.append("--echo_files " + " ".join(cli_echo_paths))
     cmd.append("--te_ms " + " ".join(str(t) for t in te_list))
     if mask_path:
-        cmd.append(f"--mask {Path(mask_path).name}")
+        mask_cli = orig_mask_path if orig_mask_path else str(mask_path)
+        cmd.append(f"--mask {mask_cli}")
     cmd.append(f"--transformer_batch_size {batch_size}")
-    print("  " + " \\\n    ".join(cmd))
+    _sep = "-" * 56
+    print()
+    print(_sep)
+    print("  Equivalent command-line invocation:")
+    print(_sep)
+    print("  " + " \\\n      ".join(cmd))
+    print(_sep)
     print()
 
 
-def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size, vmin=0, vmax=100):
+def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size, vmin=0, vmax=100,
+                orig_echo_paths=None, orig_mask_path=None):
     log_q = job["log_queue"]
     orig = sys.stdout
     sys.stdout = _QueueWriter(log_q, orig)
@@ -123,7 +133,8 @@ def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size,
             transformer_out = work_dir / "transformer_outputs"
             deeprelaxo_out = work_dir / "deeprelaxo_outputs"
 
-            _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size)
+            _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size,
+                              orig_echo_paths=orig_echo_paths, orig_mask_path=orig_mask_path)
 
             print("============================")
             print("STEP 1: ESTIMATOR")
@@ -230,6 +241,11 @@ def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
         return
 
     work_dir = Path(tempfile.mkdtemp(prefix="deeprelaxo_"))
+
+    orig_echo_paths = [str(_to_path(f)) for f in files]
+    _omask = _to_path(mask_file)
+    orig_mask_path = str(_omask) if _omask and _omask.exists() else None
+
     echo_paths = []
     for f in files:
         src = _to_path(f)
@@ -257,7 +273,8 @@ def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
     job = {"status": "queued", "log_queue": log_q, "result_path": None}
     threading.Thread(
         target=_run_thread,
-        args=(job, work_dir, pipeline_mode, echo_paths, te_list, mask_path, int(batch_size), float(vmin), float(vmax)),
+        args=(job, work_dir, pipeline_mode, echo_paths, te_list, mask_path, int(batch_size), float(vmin), float(vmax),
+              orig_echo_paths, orig_mask_path),
         daemon=True,
     ).start()
 
