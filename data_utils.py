@@ -87,11 +87,44 @@ def load_mask_array(mask_path, reference_shape):
     return mask
 
 
+# GE Medical Systems private tag: "Image Type (real, imaginary, phase, magnitude)".
+# Predates DICOM's standard ComplexImageComponent and GE often uses this
+# instead of marking ImageType. Enumeration: 0=mag, 1=phase, 2=real, 3=imag.
+_GE_IMAGE_TYPE_TAG = (0x0043, 0x102F)
+_GE_IMAGE_TYPE_MAP = {0: "M", 1: "P", 2: "R", 3: "I"}
+
+
+def _image_type_markers(ds):
+    """Modality markers, drawing on ImageType, ComplexImageComponent, and the
+    GE private tag — so vendors that don't set ImageType still classify."""
+    markers = {str(t).upper() for t in list(getattr(ds, "ImageType", []))}
+
+    cic = getattr(ds, "ComplexImageComponent", None)
+    if cic:
+        s = str(cic).upper()
+        if   s.startswith("MAG"):  markers.add("M")
+        elif s.startswith("PH"):   markers.add("P")
+        elif s.startswith("REAL"): markers.add("R")
+        elif s.startswith("IMAG"): markers.add("I")
+
+    try:
+        elem = ds.get(_GE_IMAGE_TYPE_TAG)
+        if elem is not None:
+            v = elem.value
+            if isinstance(v, (list, tuple)):
+                v = v[0] if v else None
+            if v is not None:
+                ge_marker = _GE_IMAGE_TYPE_MAP.get(int(v))
+                if ge_marker:
+                    markers.add(ge_marker)
+    except Exception:
+        pass
+
+    return markers
+
+
 def _is_magnitude_dicom(ds):
-    image_type = list(getattr(ds, "ImageType", []))
-    if not image_type:
-        return True
-    markers = {str(t).upper() for t in image_type}
+    markers = _image_type_markers(ds)
     if "M" in markers or "MAGNITUDE" in markers:
         return True
     if {"P", "PHASE", "I", "IMAGINARY", "R", "REAL"} & markers:
@@ -99,8 +132,11 @@ def _is_magnitude_dicom(ds):
     for m in markers:
         if m.startswith("M_") or m.endswith("_M"):
             return True
-        if m.startswith("P_") or m.endswith("_P"):
+        if m.startswith(("P_", "R_", "I_")) or m.endswith(("_P", "_R", "_I")):
             return False
+    # Truly unmarked DICOMs default to magnitude (legacy behaviour — DeepRelaxo
+    # only consumes magnitude, so this is the safe fallback when the user
+    # provides a folder of unlabelled magnitude DICOMs).
     return True
 
 

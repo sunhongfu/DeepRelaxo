@@ -735,23 +735,8 @@ button.secondary:active {
 """
 
 
-FORCE_DARK_JS = """
-<script>
-  (function() {
-    try {
-      var url = new URL(window.location.href);
-      if (url.searchParams.get('__theme') !== 'dark') {
-        url.searchParams.set('__theme', 'dark');
-        window.location.replace(url.toString());
-      }
-    } catch (e) {}
-  })();
-</script>
-"""
-
-
-with gr.Blocks(title="DeepRelaxo") as app:
-    gr.HTML(f"<style>{CUSTOM_CSS}</style>{FORCE_DARK_JS}", padding=False)
+with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
+    gr.HTML(f"<style>{CUSTOM_CSS}</style>", padding=False)
     gr.Markdown(
         "# DeepRelaxo — Deep learning brain R2* mapping with reduced echoes\n"
         "<span style='font-size: 1.2em'>"
@@ -794,7 +779,7 @@ with gr.Blocks(title="DeepRelaxo") as app:
                     magnitudes_input = gr.UploadButton(
                         "📄  Add NIfTI / MAT Magnitudes",
                         file_count="multiple",
-                        file_types=[".nii", ".nii.gz", ".mat"],
+                        file_types=[".nii", ".nii.gz", ".gz", ".mat"],
                         variant="primary",
                     )
                     magnitudes_info = gr.Markdown("")
@@ -857,7 +842,7 @@ with gr.Blocks(title="DeepRelaxo") as app:
             mask_button = gr.UploadButton(
                 "🧠  Select Brain Mask",
                 file_count="single",
-                file_types=[".nii", ".nii.gz", ".mat"],
+                file_types=[".nii", ".nii.gz", ".gz", ".mat"],
                 variant="primary",
             )
             # Hidden file display — appears with per-file X + download icon
@@ -901,16 +886,7 @@ with gr.Blocks(title="DeepRelaxo") as app:
         ) as log_group:
             log_out = gr.Textbox(show_label=False, lines=8, max_lines=20, interactive=False, autoscroll=True)
 
-        # ── 6. Results ─────────────────────────────────────────
-        with gr.Accordion(
-            "Results", open=True, visible=False,
-            elem_classes=["dr-section", "dr-accordion"],
-        ) as results_group:
-            gr.Markdown("Click the file size on the right to download.")
-            result_file = gr.File(show_label=False, file_count="multiple")
-            result_info = gr.Markdown("")
-
-        # ── 7. Visualisation ───────────────────────────────────
+        # ── 6. Visualisation ───────────────────────────────────
         with gr.Accordion(
             "Visualisation", open=True, visible=False,
             elem_classes=["dr-section", "dr-accordion"],
@@ -943,6 +919,15 @@ with gr.Blocks(title="DeepRelaxo") as app:
                 vmin_input = gr.Number(value=0, label="Display window min (R2*, s⁻¹)", precision=2)
                 vmax_input = gr.Number(value=100, label="Display window max (R2*, s⁻¹)", precision=2)
         output_state = gr.State((None, None))
+
+        # ── 7. Results ─────────────────────────────────────────
+        with gr.Accordion(
+            "Results", open=True, visible=False,
+            elem_classes=["dr-section", "dr-accordion"],
+        ) as results_group:
+            gr.Markdown("Click the file size on the right to download.")
+            result_file = gr.File(show_label=False, file_count="multiple")
+            result_info = gr.Markdown("")
 
     def _sort_paths(paths):
         return sorted(paths, key=lambda p: _natural_key(p))
@@ -1307,26 +1292,40 @@ def _find_free_port(preferred=7860, max_tries=20, host="127.0.0.1"):
 
 
 if __name__ == "__main__":
+    import os
     host = "127.0.0.1"
     port = _find_free_port(7860, host=host)
     if port != 7860:
         print(f"⚠️  Port 7860 is in use — falling back to {port}")
 
-    # Auto-open the browser at the dark-themed URL once the server is up.
-    # We poll the port instead of fixed-sleeping so the browser doesn't
-    # arrive before Gradio is listening.
-    import webbrowser, socket, threading, time
+    url = f"http://{host}:{port}/"
+    is_remote = bool(os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT")
+                     or os.environ.get("SSH_TTY"))
+    if is_remote:
+        print()
+        print("=" * 60)
+        print("Running over SSH — auto-open skipped.")
+        print(f"Open this URL in your local browser:\n  {url}")
+        print("If the host isn't reachable from your laptop, forward the port:")
+        print(f"  ssh -L {port}:127.0.0.1:{port} <user>@<host>")
+        print("=" * 60)
+        print()
+    else:
+        # Poll the port so the browser doesn't arrive before Gradio is listening.
+        import webbrowser, socket, threading, time
 
-    def _open_when_ready():
-        url = f"http://{host}:{port}/?__theme=dark"
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(0.3)
-                if s.connect_ex((host, port)) == 0:
-                    webbrowser.open(url)
-                    return
-            time.sleep(0.2)
+        def _open_when_ready():
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.3)
+                    if s.connect_ex((host, port)) == 0:
+                        try:
+                            webbrowser.open(url)
+                        except Exception:
+                            pass
+                        return
+                time.sleep(0.2)
 
-    threading.Thread(target=_open_when_ready, daemon=True).start()
-    app.launch(server_name=host, server_port=port)
+        threading.Thread(target=_open_when_ready, daemon=True).start()
+    app.launch(server_name=host, server_port=port, max_file_size="5gb")

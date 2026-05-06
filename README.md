@@ -11,7 +11,7 @@ Pretrained checkpoints and demo data are hosted on Hugging Face:
 
 - **DICOM folder input** — drop your raw multi-echo GRE magnitude folder; echoes, TE values, and slice ordering are read from the headers automatically. Works in both the **web app** and the **CLI** (`--dicom_dir`).
 - **NIfTI / MAT input** — multiple 3D echoes or a single 4D volume (`.nii`, `.nii.gz`, `.mat` v5/v7.3 all supported).
-- **Browser-based UI** — collapsible sections, live progress, slice slider, shape verification (echo-to-echo and mask-vs-magnitudes), per-run "equivalent CLI command" log entry, dark-mode auto-open with port auto-fallback.
+- **Browser-based UI** — collapsible sections, live progress, slice slider, shape verification (echo-to-echo and mask-vs-magnitudes), per-run "equivalent CLI command" log entry, port auto-fallback (`7860 → 7861 → …`), and SSH-aware launch (the auto-open browser step is skipped on remote hosts and a port-forward hint is printed instead).
 - **Two outputs** — Step 1 (`R2s_transformer_mlp.nii`) is downloadable as soon as it's ready; Step 2 (`R2s_deeprelaxo.nii`) finalises afterwards.
 
 ## Layout
@@ -174,15 +174,15 @@ The page is organised top-to-bottom; each section is a collapsible accordion.
 Two tabs — choose **one**:
 
 ##### 📁 DICOM Folder *(recommended)*
-Click **Select DICOM Folder** and pick the folder containing your multi-echo GRE **magnitude** DICOMs. The app:
+Click **Select DICOM Folder** and pick the folder containing your multi-echo GRE DICOMs. **Mixed-modality folders (magnitude + phase / real / imaginary) are fine** — DeepRelaxo only consumes the magnitude DICOMs. The app:
 - walks the folder recursively (any extension or none — `.dcm`, `.ima`, `.dicom`, …);
-- filters to magnitude only via `ImageType` (phase / real / imaginary skipped);
+- filters to magnitude only via `ImageType`, with fall-backs to `ComplexImageComponent` and the GE private tag `(0043, 102f)` so unmarked GE DICOMs (where `ImageType = ORIGINAL/PRIMARY/OTHER`) still classify correctly;
 - groups by `EchoTime`, sorts each echo by `ImagePositionPatient` (fallback `SliceLocation` / `InstanceNumber`);
 - applies `RescaleSlope` / `RescaleIntercept`;
 - builds an LPS→RAS NIfTI affine and writes one NIfTI per echo (`dcm_converted_to_nii_e1.nii`, `e2.nii`, …);
 - auto-fills the **Echo Times** field from the headers.
 
-A live progress bar shows reading → parsing → done. Mixed-study folders, single-echo folders, or non-magnitude-only folders are rejected with a clear message instead of producing wrong results.
+A live progress bar shows reading → parsing → done. Mixed-study folders, single-echo folders, or folders with **no magnitude DICOMs at all** are rejected with a clear message instead of producing wrong results.
 
 ##### 📄 NIfTI / MAT files *(advanced)*
 Click **Add NIfTI / MAT Magnitudes** and pick:

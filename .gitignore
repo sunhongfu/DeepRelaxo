@@ -10,3 +10,9 @@
 
 checkpoints
 demo
+# Local DICOM samples and conversion outputs
+*.dcm
+*.IMA
+*.ima
+*.dicom
+dicom_converted*/
