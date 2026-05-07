@@ -10,7 +10,7 @@ Pretrained checkpoints and demo data are hosted on Hugging Face:
 ## Highlights
 
 - **NIfTI / MAT input** — multiple 3D echoes or a single 4D volume (`.nii`, `.nii.gz`, `.mat` v5/v7.3 all supported).
-- **DICOM → NIfTI converter** — `dicom_to_nifti.py` walks a raw multi-echo GRE folder, filters magnitude (using `ImageType`, `ComplexImageComponent`, and the GE private tag `(0043, 102f)`), sorts by slice position, and writes one NIfTI per echo plus a `params.json` ready for `--from_converted`. Mixed-modality folders (magnitude + phase / real / imaginary) are accepted — the script keeps only what DeepRelaxo needs.
+- **DICOM → NIfTI converter** — standalone `dicom_to_nifti.py` (byte-identical with the copies in iQSM and iQSM+). One folder or many (`--dicom_dir A B …`); auto-classifies by `ImageType` / `ComplexImageComponent` / GE private tag `(0043, 102f)`; writes a single NIfTI per modality (3D for single-echo, 4D for multi-echo) plus a `params.json` ready for `--from_converted`. Modality flags (`--phase_dir`, `--mag_dir`, …) are a rescue path for mis-tagged DICOMs. Mixed-modality folders are fine — DeepRelaxo only consumes the magnitude output.
 - **Browser-based UI** — collapsible sections, live progress, slice slider, shape verification (echo-to-echo and mask-vs-magnitudes), brain-mask preview alongside the R2* maps, per-run "equivalent CLI command" log entry, port auto-fallback (`7860 → 7861 → …`), and SSH-aware launch (the auto-open browser step is skipped on remote hosts and a port-forward hint is printed instead).
 - **Two outputs** — Step 1 (`R2s_transformer_mlp.nii`) is downloadable as soon as it's ready; Step 2 (`R2s_deeprelaxo.nii`) finalises afterwards.
 
@@ -20,8 +20,8 @@ Pretrained checkpoints and demo data are hosted on Hugging Face:
 - `run_deeprelaxo_pipeline.py` — runs the estimator stage followed by the denoiser stage.
 - `run_estimator_stage.py` — estimator-stage inference utilities.
 - `run_denoiser_stage.py` — single-map denoiser inference utilities.
-- `dicom_to_nifti.py` — standalone converter from a raw multi-echo GRE DICOM folder to one NIfTI per echo plus a `params.json`.
-- `data_utils.py` — NIfTI / MAT / DICOM loaders and shape utilities.
+- `dicom_to_nifti.py` — standalone, self-contained DICOM → NIfTI converter. Byte-identical with the copies in iQSM and iQSM+; writes a single magnitude NIfTI (3D / 4D) plus a `params.json` ready for `--from_converted`.
+- `data_utils.py` — NIfTI / MAT / DICOM loaders and shape utilities (the in-repo magnitude-only DICOM loader is what `run_deeprelaxo_pipeline.py --dicom_dir` uses; for new workflows prefer the standalone `dicom_to_nifti.py`).
 - `transformer_mlp_model.py` and `unet3d_model.py` — model architectures.
 
 ---
@@ -160,21 +160,41 @@ Choose the web app (recommended) or the command-line interface.
 
 ## DICOM → NIfTI conversion
 
-If your data is a folder of raw DICOMs from a multi-echo GRE acquisition, convert it once with the standalone script before running DeepRelaxo:
+If your data is a folder of raw DICOMs from a multi-echo GRE acquisition, convert it once with the standalone script before running DeepRelaxo. The script is **byte-identical with the copies in iQSM and iQSM+** — independent of the downstream pipeline. Pick whichever repo's copy is closest at hand.
+
+### Two modes
+
+**Normal path — `--dicom_dir DIR [DIR …]`** &nbsp;·&nbsp; auto-classifies by DICOM `ImageType`, `ComplexImageComponent`, and the GE private tag `(0043, 102f)`. Use this whenever your tags are reliable. DeepRelaxo only needs magnitude, so passing extra modalities is harmless — they're written to disk but not consumed:
 
 ```bash
-python dicom_to_nifti.py --dicom_dir /path/to/dicom_folder
-# writes ./dicom_converted/{dcm_converted_phase[_4d].nii.gz,
-#                            dcm_converted_magnitude[_4d].nii.gz,
-#                            params.json}
+# Single mixed folder of DICOMs (any extension or none — .dcm, .ima, .dicom):
+python dicom_to_nifti.py --dicom_dir /path/to/dicoms
 
-python dicom_to_nifti.py --dicom_dir /path/to/dicom_folder \
-                         --out_dir   ./my_subject_converted
+# Multiple folders walked together (e.g. magnitude + phase in separate dirs):
+python dicom_to_nifti.py --dicom_dir /path/to/mag /path/to/phase
+
+# Specify the output folder (default: ./dicom_converted):
+python dicom_to_nifti.py --dicom_dir /path/to/dicoms --out_dir ./my_subject_converted
 ```
 
-The converter walks the folder recursively (any extension or none — `.dcm`, `.ima`, `.dicom`, …); splits DICOMs into modality buckets via `ImageType`, with fall-backs to `ComplexImageComponent` and the GE private tag `(0043, 102f)`; groups by `EchoTime`, sorts each echo by `ImagePositionPatient` (fall-backs `SliceLocation` / `InstanceNumber`); applies `RescaleSlope` / `RescaleIntercept`; builds an LPS→RAS NIfTI affine; and writes a 3D NIfTI per modality (or 4D for multi-echo) plus a `params.json`. Mixed-modality folders (magnitude + phase / real / imaginary) are accepted — DeepRelaxo only consumes the magnitude output, the rest is ignored.
+**Rescue path — `--mag_dir`** &nbsp;·&nbsp; for when magnitude DICOMs are mis-tagged (e.g. `ImageType = ORIGINAL/PRIMARY/OTHER` and `--dicom_dir` would route them to the wrong bucket). The script trusts the caller and force-places every file into the magnitude bucket:
 
-After conversion you'll see a copy-paste-friendly summary:
+```bash
+python dicom_to_nifti.py --mag_dir /path/to/magnitude_dicoms
+```
+
+The `--phase_dir`, `--real_dir`, `--imag_dir` rescue flags exist too but produce phase / real / imaginary NIfTIs that DeepRelaxo doesn't consume — if you don't have any magnitude DICOMs at all, you'll have to derive magnitude yourself before running DeepRelaxo. The two modes can't be mixed.
+
+After conversion the script writes (names depend on echo count):
+
+```text
+converted/
+├── dcm_converted_magnitude[_4d].nii.gz   # 3D for single-echo, 4D for multi-echo
+├── dcm_converted_phase[_4d].nii.gz       # written if phase was present (DeepRelaxo ignores it)
+└── params.json
+```
+
+…and prints a copy-paste-friendly summary:
 
 ```text
 ─── Acquisition values (paste these into the web app) ───
@@ -184,21 +204,22 @@ After conversion you'll see a copy-paste-friendly summary:
 ─────────────────────────────────────────────────────────
 ```
 
-`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_dir_string`) formatted exactly the way the web app's input fields expect them. Open the JSON, copy the relevant string, paste into the form. Or skip the form and use `--from_converted` (auto-fills everything from the same JSON):
+`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_dir_string`) formatted exactly the way the web app's input field expects them. Open the JSON, copy the relevant string, paste into the form. Or skip the form and use `--from_converted` (auto-fills everything from the same JSON):
 
 ```bash
-# CLI — auto-loads TEs, voxel size, magnitude path from params.json:
+# CLI — auto-loads TEs and the magnitude NIfTI path from params.json:
 python run_deeprelaxo_pipeline.py --from_converted ./dicom_converted \
                                   --mask BET_mask.nii
 
-# Web app — upload dcm_converted_magnitude[_4d].nii.gz to "MRI Magnitudes",
-# paste te_ms_string from params.json into the Echo Times field:
+# Web app — upload dcm_converted_magnitude[_4d].nii.gz to "MRI Magnitudes"
+# (4D files are accepted as multi-echo), paste te_ms_string from
+# params.json into the Echo Times field:
 python app.py
 ```
 
-> **Why isn't this in the web app?** Browsers don't handle thousand-file folder uploads well: tempfile creation per file hits the OS open-file limit (`OSError: Too many open files`), and the "Upload N files to this site?" prompt makes some users worry their data is being uploaded to a remote server. Running the converter locally avoids both — and DICOM → NIfTI is a one-time step, so re-running the pipeline after that is fast.
+> **`--out_dir` is overwritten in place on each run.** A single consolidated `params.json` is written. If `params.json` or any `dcm_converted_*.nii(.gz)` already exists, the script lists them and prints a clear warning before overwriting. Use a fresh `--out_dir` per subject / acquisition.
 
-> The **same `dicom_to_nifti.py` ships byte-identically with iQSM, iQSM+, and DeepRelaxo** — the script is independent of the downstream pipeline. Pick whichever copy is closest at hand; the output is generic enough for any of them (or any other QSM / R2* tool).
+> **Why isn't this in the web app?** Browsers don't handle thousand-file folder uploads well: tempfile creation per file hits the OS open-file limit (`OSError: Too many open files`), and the "Upload N files to this site?" prompt makes some users worry their data is being uploaded to a remote server. Running the converter locally avoids both — and DICOM → NIfTI is a one-time step, so re-running the pipeline after that is fast.
 
 ---
 
@@ -297,7 +318,7 @@ mask: BET_mask.nii
 
 ### Direct Command-Line
 
-From a folder produced by [`dicom_to_nifti.py`](#dicom--nifti-conversion) — TE values, echo files, and voxel size come from the folder's `params.json`:
+From a folder produced by the [standalone `dicom_to_nifti.py`](#dicom--nifti-conversion) — TE values and the magnitude NIfTI path are read from `params.json`:
 
 ```bash
 python run_deeprelaxo_pipeline.py \
@@ -305,7 +326,9 @@ python run_deeprelaxo_pipeline.py \
   --mask BET_mask.nii
 ```
 
-DICOM folder (multi-echo magnitude GRE, TEs auto-detected from headers — one-shot path if you don't plan to re-run on the same data):
+`--from_converted` reads `dcm_converted_magnitude[_4d].nii.gz` (3D for single-echo, 4D for multi-echo) and the TE list from `params.json`. This is the recommended path.
+
+DICOM folder, one-shot (skips the standalone-conversion step — convenient if you don't plan to re-run on the same data):
 
 ```bash
 python run_deeprelaxo_pipeline.py \
@@ -313,7 +336,7 @@ python run_deeprelaxo_pipeline.py \
   --mask BET_mask.nii
 ```
 
-The folder is walked recursively; magnitude images are filtered, grouped by `EchoTime`, sorted by `ImagePositionPatient`, and saved as one NIfTI per echo (`dcm_converted_to_nii_e1.nii`, `dcm_converted_to_nii_e2.nii`, …) inside `<transformer_out_parent>/dicom_converted_nii/`. TE values come from headers — pass `--te_ms` only if you want to override. For repeated runs over the same dataset, prefer running `dicom_to_nifti.py` once and using `--from_converted`.
+The folder is walked recursively, magnitude images are filtered, grouped by `EchoTime`, sorted by `ImagePositionPatient`, and saved as one NIfTI per echo (`dcm_converted_to_nii_e1.nii`, `dcm_converted_to_nii_e2.nii`, …) inside `<transformer_out_parent>/dicom_converted_nii/`. TE values come from headers — pass `--te_ms` only to override. This is the legacy in-repo magnitude-only loader; for repeat runs over the same dataset, prefer the standalone `dicom_to_nifti.py` + `--from_converted` (output schema is unified and `params.json` carries copy-paste-ready strings).
 
 Multiple 3D NIfTI echoes:
 
@@ -416,6 +439,6 @@ Launch the web app:
 python app.py
 ```
 
-In the **NIfTI / MAT files** tab, click *Add NIfTI / MAT Magnitudes* and pick all five `demo/mag*.nii` files. In **Echo Times**, paste `4.9, 9.9, 14.8, 19.8, 24.7` (or the compact form `4.9 : 5 : 5`). In **Brain Mask**, click *Select Brain Mask* and pick `demo/BET_mask.nii`. Hit **Run Pipeline**.
+Under **MRI Magnitudes**, click *Add NIfTI / MAT Magnitudes* and pick all five `demo/mag*.nii` files. In **Echo Times**, paste `4.9, 9.9, 14.8, 19.8, 24.7` (or the compact form `4.9 : 5 : 5`). In **Brain Mask**, click *Select Brain Mask* and pick `demo/BET_mask.nii`. Hit **Run Pipeline**.
 
 All three options produce the same outputs: a Step 1 R2* map (`R2s_transformer_mlp.nii`) and a final denoised R2* map (`R2s_deeprelaxo.nii`).

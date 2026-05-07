@@ -61,9 +61,9 @@ def main():
         '--from_converted', metavar='DIR',
         help=(
             'Folder produced by `dicom_to_nifti.py` (contains '
-            'dcm_converted_to_nii_e*.nii and a params.json). TE values and '
-            'echo filenames are read from params.json automatically; '
-            'override TEs with --te_ms if needed.'
+            'dcm_converted_magnitude[_4d].nii.gz and a params.json). TE '
+            'values and the magnitude path are read from params.json '
+            'automatically; override TEs with --te_ms if needed.'
         ),
     )
     parser.add_argument(
