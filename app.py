@@ -602,13 +602,15 @@ CUSTOM_CSS = """
 #dr-run-btn,         #dr-run-btn         button,
 #dr-download-all-btn,#dr-download-all-btn button,
 #dr-clear-order-btn, #dr-clear-order-btn button,
-#dr-mask-clear-btn,  #dr-mask-clear-btn  button {
+#dr-mask-clear-btn,  #dr-mask-clear-btn  button,
+.dr-upload-btn,      .dr-upload-btn      button {
     height: 56px !important;
     min-height: 56px !important;
     max-height: 56px !important;
     width: 100% !important;
     box-sizing: border-box !important;
     font-weight: 600 !important;
+    white-space: nowrap !important;
 }
 
 /* Download all (ZIP) — slate / neutral. */
@@ -850,6 +852,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 file_count="single",
                 file_types=[".nii", ".nii.gz", ".gz", ".mat"],
                 variant="primary",
+                elem_classes="dr-upload-btn",
             )
             # Hidden file display — appears with per-file X + download icon
             # only after a mask is uploaded (mirrors Processing Order).
