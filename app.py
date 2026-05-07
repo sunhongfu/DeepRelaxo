@@ -1018,10 +1018,8 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 f"✅ Added {len(added_names)} files:\n\n"
                 + "\n".join(f"- `{n}`" for n in added_names)
             )
-        # Auto-expand only when multiple 3D files were uploaded — single-file
-        # (3D or 4D) uploads leave the panel as the user left it.
-        order_open = gr.update(open=True) if len(srt) >= 2 else gr.update()
-        return (updated, srt or None, summary, None, order_open, status,
+        # Auto-expand on any upload (the panel is folded by default).
+        return (updated, srt or None, summary, None, gr.update(open=True), status,
                 _clear_btn_update(len(srt)))
 
     def show_mask_info(mask, accumulated_paths):
