@@ -515,14 +515,14 @@ def _detect_echoes(paths):
 
 
 CUSTOM_CSS = """
-/* ── Global type scale — matches the iQSM / iQSM+ density ── */
+/* ── Shared visual scale (kept identical across iQSM / iQSM+ / DeepRelaxo) ── */
 .gradio-container {
     --text-md: 17px;
     --block-info-text-size: 15px;
     --block-label-text-size: 16px;
     --block-title-text-size: 18px;
     font-size: 17px !important;
-    line-height: 1.4 !important;
+    line-height: 1.5 !important;
 }
 .gradio-container .prose,
 .gradio-container .prose p,
@@ -530,7 +530,7 @@ CUSTOM_CSS = """
 .gradio-container .markdown,
 .gradio-container .markdown p {
     font-size: 17px !important;
-    line-height: 1.45 !important;
+    line-height: 1.5 !important;
     margin: 4px 0 6px 0 !important;
 }
 .gradio-container input,
@@ -538,20 +538,20 @@ CUSTOM_CSS = """
 .gradio-container select { font-size: 16px !important; }
 .gradio-container button { font-size: 16px !important; }
 
-/* Section titles — coloured for quick scanning, tightened margins */
+/* Section titles */
 .gradio-container h3 {
     font-size: 1.4rem !important;
     padding: 4px 0 6px 14px !important;
     color: #1d4ed8 !important;
     border-left: 5px solid #1d4ed8 !important;
-    margin: 4px 0 8px 4px !important;
+    margin: 6px 0 10px 4px !important;
 }
 .dark .gradio-container h3 {
     color: #60a5fa !important;
     border-left-color: #60a5fa !important;
 }
 
-/* Accordion label — match the h3 section heading style */
+/* Accordion label — match h3 */
 .dr-accordion > .label-wrap,
 .dr-accordion > div > .label-wrap,
 .dr-accordion button.label-wrap,
@@ -597,12 +597,40 @@ CUSTOM_CSS = """
 #dr-mask-file .icon-button-wrapper.top-panel {
     display: none !important;
 }
-/* Explicit Remove buttons (Processing Order, Brain Mask) — full-width */
+/* Common 56px height for all action buttons so the form looks consistent
+   (matches iQSM / iQSM+). */
+#dr-run-btn,         #dr-run-btn         button,
+#dr-download-all-btn,#dr-download-all-btn button,
+#dr-clear-order-btn, #dr-clear-order-btn button,
+#dr-mask-clear-btn,  #dr-mask-clear-btn  button {
+    height: 56px !important;
+    min-height: 56px !important;
+    max-height: 56px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    font-weight: 600 !important;
+}
+
+/* Download all (ZIP) — slate / neutral. */
+#dr-download-all-btn,
+#dr-download-all-btn button {
+    background: #475569 !important;
+    background-image: linear-gradient(180deg, #64748b, #334155) !important;
+    color: #ffffff !important;
+    border-color: #334155 !important;
+}
+#dr-download-all-btn:hover,
+#dr-download-all-btn button:hover {
+    background: #334155 !important;
+    background-image: linear-gradient(180deg, #475569, #1e293b) !important;
+}
+
+/* Clear / Remove buttons get the common 56px height; margin-top to space
+   them from the file widget above. */
 #dr-clear-order-btn,
 #dr-clear-order-btn button,
 #dr-mask-clear-btn,
 #dr-mask-clear-btn button {
-    width: 100% !important;
     margin-top: 4px !important;
 }
 
@@ -630,10 +658,10 @@ CUSTOM_CSS = """
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
 }
 
-/* Section panels — denser layout to match iQSM / iQSM+ */
+/* Section panels */
 .dr-section {
-    margin-bottom: 14px !important;
-    padding: 10px 16px !important;
+    margin-bottom: 16px !important;
+    padding: 12px 18px !important;
     border: 2px solid #4b5563 !important;
     border-radius: 10px !important;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
@@ -644,15 +672,13 @@ CUSTOM_CSS = """
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
 }
 
-/* Markdown content inside sections — indent paragraphs / lists from the edge */
+/* Markdown inside sections — denser paragraph + list spacing */
 .dr-section .prose,
 .dr-section .markdown,
-.dr-section .gradio-markdown {
-    padding: 0 6px !important;
-}
+.dr-section .gradio-markdown { padding: 0 6px !important; }
 .dr-section .prose p,
 .dr-section .markdown p {
-    margin: 3px 0 5px 0 !important;
+    margin: 4px 0 6px 0 !important;
     padding-left: 4px !important;
 }
 .dr-section .prose ul,
@@ -660,12 +686,10 @@ CUSTOM_CSS = """
 .dr-section .markdown ul,
 .dr-section .markdown ol {
     padding-left: 28px !important;
-    margin: 3px 0 5px 0 !important;
+    margin: 4px 0 6px 0 !important;
 }
 .dr-section .prose li,
-.dr-section .markdown li {
-    margin: 1px 0 !important;
-}
+.dr-section .markdown li { margin: 2px 0 !important; }
 
 /* Pull-quote / italic asides ("*Auto-filled when …*") */
 .dr-section em {
@@ -675,7 +699,7 @@ CUSTOM_CSS = """
     color: #9ca3af !important;
 }
 
-/* Run Pipeline — green CTA, large, full-width */
+/* Run Pipeline — green */
 #dr-run-btn,
 #dr-run-btn button {
     background: #16a34a !important;
@@ -683,19 +707,12 @@ CUSTOM_CSS = """
     color: #ffffff !important;
     border-color: #15803d !important;
     font-size: 18px !important;
-    padding: 14px 28px !important;
     font-weight: 700 !important;
-    width: 100% !important;
 }
 #dr-run-btn:hover,
 #dr-run-btn button:hover {
     background: #15803d !important;
     background-image: linear-gradient(180deg, #16a34a, #14532d) !important;
-    border-color: #14532d !important;
-}
-#dr-run-btn:active,
-#dr-run-btn button:active {
-    background: #14532d !important;
 }
 
 /* Make secondary buttons look clearly clickable instead of blending in (light mode) */
@@ -738,7 +755,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     gr.Markdown(
         "# DeepRelaxo — Deep learning brain R2* mapping with reduced echoes\n"
         "<span style='font-size: 1.2em'>"
-        "🐙 [GitHub (web app docs)](https://github.com/sunhongfu/DeepRelaxo#web-app)"
+        "🐙 [GitHub](https://github.com/sunhongfu/DeepRelaxo#web-app)"
         " &nbsp;·&nbsp; "
         "📄 [Paper (MRM)](https://onlinelibrary.wiley.com/doi/10.1002/mrm.70405?af=R)"
         " &nbsp;·&nbsp; "

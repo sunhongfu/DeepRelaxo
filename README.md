@@ -7,6 +7,8 @@ This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade
 Pretrained checkpoints and demo data are hosted on Hugging Face:
 [sunhongfu/DeepRelaxo](https://huggingface.co/sunhongfu/DeepRelaxo/tree/main)
 
+**Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Quick Start](#quick-start) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples)
+
 ## Highlights
 
 - **NIfTI / MAT input** — multiple 3D echoes or a single 4D volume (`.nii`, `.nii.gz`, `.mat` v5/v7.3 all supported).
