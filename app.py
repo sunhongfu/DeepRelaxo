@@ -77,7 +77,7 @@ def _parse_te_input(s):
         if n < 1:
             raise ValueError(f"TE count must be ≥ 1 (got {n})")
         return [round(first + i * spacing, 6) for i in range(n)]
-    return [float(t.strip()) for t in s.split(",") if t.strip()]
+    return [float(t.strip()) for t in s.replace(",", " ").split() if t.strip()]
 
 
 def _to_path(f):
