@@ -1,11 +1,10 @@
 # DeepRelaxo
 
-DeepRelaxo: Fast Mono-Exponential Magnitude Brain R2* Mapping With Reduced Echoes Using Self-Supervised Deep Learning (MRM paper).
+**[Fast Mono-Exponential Magnitude Brain R2* Mapping With Reduced Echoes Using Self-Supervised Deep Learning](https://onlinelibrary.wiley.com/doi/10.1002/mrm.70405?af=R)**
+
+[MRM 2025](https://onlinelibrary.wiley.com/doi/10.1002/mrm.70405?af=R) &nbsp;|&nbsp; [HuggingFace](https://huggingface.co/sunhongfu/DeepRelaxo/tree/main) &nbsp;|&nbsp; [deepMRI collection](https://github.com/sunhongfu/deepMRI)
 
 This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade: an estimator stage based on Transformer-MLP followed by a denoiser stage based on 3D-UNet.
-
-Pretrained checkpoints and demo data are hosted on Hugging Face:
-[sunhongfu/DeepRelaxo](https://huggingface.co/sunhongfu/DeepRelaxo/tree/main)
 
 **Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Quick Start](#quick-start) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples)
 
