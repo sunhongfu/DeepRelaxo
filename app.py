@@ -722,8 +722,13 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             elem_classes=["dr-section", "dr-accordion"],
         ) as order_group:
             gr.Markdown(
-                "Confirm the order before running. If the order looks wrong, "
-                "rename your files (natural numeric sort: `mag1`, `mag2`, …, `mag10`)."
+                "**Only relevant when you uploaded multiple 3D files (one per echo) "
+                "for a multi-echo dataset** — this panel sets the order in which "
+                "those echoes are processed. Files are sorted naturally by filename "
+                "(`mag1`, `mag2`, …, `mag10`); rename them if the auto-sort gets it "
+                "wrong. **Skip this panel if you uploaded a single 4D volume** "
+                "(echo order is already baked into the file's last dimension) or a "
+                "single-echo 3D file."
             )
             sorted_files = gr.File(
                 file_count="multiple",
