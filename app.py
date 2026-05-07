@@ -4,6 +4,7 @@ import queue
 import shutil
 import tempfile
 import threading
+import zipfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -163,8 +164,13 @@ def _shape_summary(paths):
     return "\n".join(lines)
 
 
-def _make_slice_image(nii_path, slice_idx=None, vmin=0, vmax=100):
+def _make_slice_image(nii_path, slice_idx=None, vmin=0, vmax=100, echo_idx=None):
     data = _volume_array(str(nii_path))
+    if data.ndim == 4:
+        # Pick a single echo from a 4D volume (default: first echo).
+        e = 0 if echo_idx is None else int(echo_idx)
+        e = max(0, min(e, data.shape[3] - 1))
+        data = data[..., e]
     depth = data.shape[2]
     if slice_idx is None:
         slice_idx = depth // 2
@@ -258,14 +264,34 @@ def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size,
             job["step1_result"] = str(transformer_out / "R2s_transformer_mlp.nii")
             job["step1_image"] = _make_slice_image(job["step1_result"], vmin=vmin, vmax=vmax)
             job["depth"] = _volume_array(job["step1_result"]).shape[2]
-            # Brain-mask preview — lets the user verify orientation alignment
-            # against the magnitude-derived R2* maps once the run is done.
+            # Brain-mask preview + first-echo magnitude preview — lets the
+            # user verify mask-vs-magnitude orientation alignment after the
+            # run. Only rendered when a mask is supplied; without a mask
+            # there's nothing to check, so the magnitude preview is skipped.
             if mask_path:
                 job["mask_path"] = str(mask_path)
                 job["mask_image"] = _make_slice_image(str(mask_path), vmin=0, vmax=1)
+                # First echo: 4D path → echo 0; 3D-per-echo path → first
+                # entry in echo_paths (already sorted).
+                first_mag_path = str(echo_paths[0])
+                job["mag_path"] = first_mag_path
+                try:
+                    mag_arr = _volume_array(first_mag_path)
+                    if mag_arr.ndim == 4:
+                        mag_arr = mag_arr[..., 0]
+                    p99 = float(np.percentile(mag_arr[mag_arr > 0], 99)) if (mag_arr > 0).any() else 1.0
+                    job["mag_image"] = _make_slice_image(first_mag_path, vmin=0, vmax=p99,
+                                                         echo_idx=0)
+                    job["mag_vmax"] = p99
+                except Exception:
+                    job["mag_image"] = None
+                    job["mag_vmax"] = 1.0
             else:
                 job["mask_path"] = None
                 job["mask_image"] = None
+                job["mag_path"] = None
+                job["mag_image"] = None
+                job["mag_vmax"] = 1.0
 
             print("\n============================")
             print("STEP 2: DENOISER")
@@ -309,8 +335,30 @@ def _result_files(job):
     return files or None
 
 
+def _build_results_zip(job):
+    """Bundle Step 1 + Step 2 R2* maps into a single ZIP for one-click
+    download. Written next to result_path so it's cleaned up with the
+    rest of the run artefacts."""
+    files = _result_files(job) or []
+    if not files:
+        return None
+    result = job.get("result_path")
+    out_dir = Path(result).parent if result else Path(tempfile.gettempdir())
+    zip_path = out_dir / "deeprelaxo_results.zip"
+    try:
+        zip_path.unlink()
+    except FileNotFoundError:
+        pass
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in files:
+            zf.write(p, arcname=Path(p).name)
+    return str(zip_path)
+
+
 def _state_and_slider_update(job):
-    state = (job.get("step1_result"), job.get("result_path"), job.get("mask_path"))
+    state = (job.get("step1_result"), job.get("result_path"),
+             job.get("mask_path"), job.get("mag_path"),
+             float(job.get("mag_vmax", 1.0)))
     depth = job.get("depth")
     if depth and not job.get("_slider_init"):
         job["_slider_init"] = True
@@ -323,12 +371,17 @@ def _state_and_slider_update(job):
 
 def _visibility_updates(job):
     has_mask = bool(job.get("mask_image"))
+    has_results = bool(_result_files(job))
+    zip_path = _build_results_zip(job) if has_results else None
     return (
         gr.update(visible=True),                              # log_group
-        gr.update(visible=bool(_result_files(job))),          # results_group
+        gr.update(visible=has_results),                       # results_group
         gr.update(visible=bool(job.get("step1_image"))),      # viz_group
         gr.update(visible=has_mask),                          # mask_row
+        gr.update(visible=has_mask),                          # img_mag
         gr.update(visible=has_mask),                          # img_mask
+        (gr.update(value=zip_path, visible=True)
+         if zip_path else gr.update(visible=False)),          # download_all_btn
     )
 
 
@@ -350,13 +403,13 @@ def _stream_job(job):
         v = _visibility_updates(job)
         yield (log, _result_files(job), _result_info_md(job),
                job.get("step1_image"), job.get("result_image"),
-               job.get("mask_image"),
+               job.get("mag_image"), job.get("mask_image"),
                state, slider, *v)
     state, slider = _state_and_slider_update(job)
     v = _visibility_updates(job)
     yield (log, _result_files(job), _result_info_md(job),
            job.get("step1_image"), job.get("result_image"),
-           job.get("mask_image"),
+           job.get("mag_image"), job.get("mask_image"),
            state, slider, *v)
 
 
@@ -366,14 +419,17 @@ def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
         "",                         # result_info
         None,                       # img_step1
         None,                       # img_step2
+        None,                       # img_mag
         None,                       # img_mask
-        (None, None, None),         # output_state (step1, result, mask)
+        (None, None, None, None, 1.0),  # output_state (step1, result, mask, mag, mag_vmax)
         gr.update(),                # slice_slider
         gr.update(visible=True),    # log_group — show error message
         gr.update(visible=False),   # results_group
         gr.update(visible=False),   # viz_group
         gr.update(visible=False),   # mask_row
+        gr.update(visible=False),   # img_mag visibility
         gr.update(visible=False),   # img_mask visibility
+        gr.update(visible=False),   # download_all_btn
     )
     try:
         te_list = _parse_te_input(te_ms_str)
@@ -693,9 +749,9 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     accumulated = gr.State([])
 
     with gr.Column():
-        # ── 1. MRI Magnitudes ─────────────────────────────────
+        # ── 1. GRE Magnitudes ─────────────────────────────────
         with gr.Accordion(
-            "MRI Magnitudes", open=True,
+            "GRE Magnitudes", open=True,
             elem_classes=["dr-section", "dr-accordion"],
         ):
             gr.Markdown(
@@ -716,19 +772,16 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             )
             magnitudes_info = gr.Markdown("")
 
-        # ── 2. Processing Order ───────────────────────────────
+        # ── 2. Echo Order ─────────────────────────────────────
         with gr.Accordion(
-            "Processing Order", open=False,
+            "Echo Order", open=False,
             elem_classes=["dr-section", "dr-accordion"],
         ) as order_group:
             gr.Markdown(
-                "**Only relevant when you uploaded multiple 3D files (one per echo) "
-                "for a multi-echo dataset** — this panel sets the order in which "
-                "those echoes are processed. Files are sorted naturally by filename "
-                "(`mag1`, `mag2`, …, `mag10`); rename them if the auto-sort gets it "
-                "wrong. **Skip this panel if you uploaded a single 4D volume** "
-                "(echo order is already baked into the file's last dimension) or a "
-                "single-echo 3D file."
+                "Sets the order in which echoes are processed. **Only relevant when "
+                "you uploaded multiple 3D files (one per echo) for a multi-echo "
+                "dataset.** Files are sorted naturally by filename (`mag1`, `mag2`, "
+                "…, `mag10`); rename them if the auto-sort gets it wrong."
             )
             sorted_files = gr.File(
                 file_count="multiple",
@@ -855,26 +908,44 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 vmin_input = gr.Number(value=0, label="Display window min (R2*, s⁻¹)", precision=2)
                 vmax_input = gr.Number(value=100, label="Display window max (R2*, s⁻¹)", precision=2)
 
-            # Brain mask preview (if a mask was supplied) — shares the slice
-            # slider so users can spot orientation mismatches against the R2*
-            # maps above.
+            # Mask + first-echo magnitude preview (only when a mask was
+            # supplied) — side-by-side so users can confirm the mask is
+            # actually aligned to the input magnitude. They share the slice
+            # slider above with the R2* maps.
             with gr.Row(visible=False) as mask_row:
-                img_mask = gr.Image(
-                    label="Brain Mask (verify orientation matches R2* maps above)",
+                img_mag = gr.Image(
+                    label="First-echo magnitude (verify mask alignment)",
                     show_download_button=False,
                     show_fullscreen_button=False,
                     height=300, visible=False,
                 )
-        output_state = gr.State((None, None, None))
+                img_mask = gr.Image(
+                    label="Brain Mask (verify orientation matches magnitude)",
+                    show_download_button=False,
+                    show_fullscreen_button=False,
+                    height=300, visible=False,
+                )
+        # State carries (step1_result, deeprelaxo_result, mask_path, mag_path,
+        # mag_vmax) so render_slice can re-draw all four images on slider
+        # changes.
+        output_state = gr.State((None, None, None, None, 1.0))
 
         # ── 7. Results ─────────────────────────────────────────
         with gr.Accordion(
             "Results", open=True, visible=False,
             elem_classes=["dr-section", "dr-accordion"],
         ) as results_group:
-            gr.Markdown("Click the file size on the right to download.")
+            gr.Markdown(
+                "Click a file size on the right to download a single file, "
+                "or use **Download all (ZIP)** below for the whole bundle."
+            )
             result_file = gr.File(show_label=False, file_count="multiple")
             result_info = gr.Markdown("")
+            download_all_btn = gr.DownloadButton(
+                "📦  Download all (ZIP)",
+                visible=False,
+                elem_id="dr-download-all-btn",
+            )
 
     def _sort_paths(paths):
         return sorted(paths, key=lambda p: _natural_key(p))
@@ -930,7 +1001,10 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 f"✅ Added {len(added_names)} files:\n\n"
                 + "\n".join(f"- `{n}`" for n in added_names)
             )
-        return (updated, srt or None, summary, None, gr.update(open=True), status,
+        # Auto-expand only when multiple 3D files were uploaded — single-file
+        # (3D or 4D) uploads leave the panel as the user left it.
+        order_open = gr.update(open=True) if len(srt) >= 2 else gr.update()
+        return (updated, srt or None, summary, None, order_open, status,
                 _clear_btn_update(len(srt)))
 
     def show_mask_info(mask, accumulated_paths):
@@ -1030,7 +1104,8 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
         if not files:
             return [], None, "", gr.update(), _clear_btn_update(0)
         paths = [str(_to_path(f)) for f in files]
-        return paths, paths, _shape_summary(paths), gr.update(open=True), _clear_btn_update(len(paths))
+        # Removal: don't change the open state (only uploads auto-expand).
+        return paths, paths, _shape_summary(paths), gr.update(), _clear_btn_update(len(paths))
 
     sorted_files.change(
         sync_after_remove,
@@ -1055,7 +1130,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
 
     magnitudes_input.click(
         lambda: _RED_WAIT.format(
-            msg="⏳ Waiting for file selection / upload — Processing Order will populate once the file transfer completes…"
+            msg="⏳ Waiting for file selection / upload — Echo Order will populate once the file transfer completes…"
         ),
         outputs=magnitudes_info,
     )
@@ -1069,23 +1144,31 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     run_btn.click(
         run_pipeline,
         inputs=[accumulated, te_ms, mask_file, batch_size, vmin_input, vmax_input],
-        outputs=[log_out, result_file, result_info, img_step1, img_step2, img_mask,
+        outputs=[log_out, result_file, result_info, img_step1, img_step2,
+                 img_mag, img_mask,
                  output_state, slice_slider,
-                 log_group, results_group, viz_group, mask_row, img_mask],
+                 log_group, results_group, viz_group, mask_row, img_mag, img_mask,
+                 download_all_btn],
     )
 
     def render_slice(state, idx, vmin, vmax):
         if not state:
-            return None, None, None
-        p1 = state[0] if len(state) > 0 else None
-        p2 = state[1] if len(state) > 1 else None
-        pm = state[2] if len(state) > 2 else None
+            return None, None, None, None
+        p1     = state[0] if len(state) > 0 else None
+        p2     = state[1] if len(state) > 1 else None
+        pm     = state[2] if len(state) > 2 else None  # mask path
+        pmag   = state[3] if len(state) > 3 else None  # first-echo magnitude path
+        magmax = state[4] if len(state) > 4 else 1.0   # auto-window from p99
         img1 = _make_slice_image(p1, idx, vmin, vmax) if p1 else None
         img2 = _make_slice_image(p2, idx, vmin, vmax) if p2 else None
         # Mask is binary — render with fixed [0, 1] window, ignoring the user's
         # R2* display window.
         imgm = _make_slice_image(pm, idx, 0, 1) if pm else None
-        return img1, img2, imgm
+        # Magnitude — render with the auto-detected window so it stays
+        # readable independent of the R2* sliders. Use first echo for 4D.
+        imgmag = (_make_slice_image(pmag, idx, 0, magmax, echo_idx=0)
+                  if pmag else None)
+        return img1, img2, imgmag, imgm
 
     def step_slice(current, state, delta):
         if state is None or state[0] is None:
@@ -1097,7 +1180,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     next_btn.click(lambda c, s: step_slice(c, s, +1), inputs=[slice_slider, output_state], outputs=slice_slider)
 
     _ri = [output_state, slice_slider, vmin_input, vmax_input]
-    _ro = [img_step1, img_step2, img_mask]
+    _ro = [img_step1, img_step2, img_mag, img_mask]
     slice_slider.change(render_slice, inputs=_ri, outputs=_ro)
     vmin_input.change(   render_slice, inputs=_ri, outputs=_ro)
     vmax_input.change(   render_slice, inputs=_ri, outputs=_ro)
