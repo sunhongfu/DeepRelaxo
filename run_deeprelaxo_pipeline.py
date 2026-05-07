@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 import shutil
 
@@ -57,13 +58,24 @@ def main():
     parser.add_argument('--echo_files', nargs='+')
     parser.add_argument('--echo_4d')
     parser.add_argument(
+        '--from_converted', metavar='DIR',
+        help=(
+            'Folder produced by `dicom_to_nifti.py` (contains '
+            'dcm_converted_to_nii_e*.nii and a params.json). TE values and '
+            'echo filenames are read from params.json automatically; '
+            'override TEs with --te_ms if needed.'
+        ),
+    )
+    parser.add_argument(
         '--dicom_dir',
         help=(
             'Folder of multi-echo GRE magnitude DICOMs. The folder is walked '
             'recursively, magnitude images filtered, grouped by EchoTime, '
             'sorted by ImagePositionPatient, and saved as one NIfTI per echo '
             'in <transformer_out_parent>/dicom_converted_nii/. TE values are '
-            'auto-detected from headers (override with --te_ms if needed).'
+            'auto-detected from headers (override with --te_ms if needed). '
+            'For repeat runs over the same data, prefer running '
+            '`dicom_to_nifti.py` once and using --from_converted.'
         ),
     )
     parser.add_argument('--te_ms', nargs='+', type=float)
@@ -131,10 +143,49 @@ def main():
         magnitude_4d_path = None
 
         if sum(option is not None for option in
-               [args.echo_files, args.echo_4d, args.dicom_dir]) > 1:
-            parser.error("use at most one of --echo_files, --echo_4d, or --dicom_dir")
+               [args.echo_files, args.echo_4d, args.dicom_dir,
+                args.from_converted]) > 1:
+            parser.error(
+                "use at most one of --echo_files, --echo_4d, --dicom_dir, "
+                "or --from_converted"
+            )
 
-        if args.dicom_dir is not None:
+        if args.from_converted is not None:
+            cdir = _resolve_path(data_dir, args.from_converted)
+            if not cdir.is_dir():
+                parser.error(f"--from_converted is not a directory: {cdir}")
+            params_path = cdir / "params.json"
+            if not params_path.exists():
+                parser.error(
+                    f"params.json not found in {cdir}. Did you produce this "
+                    "folder with `dicom_to_nifti.py`?"
+                )
+            params = json.loads(params_path.read_text())
+            echo_files = params.get("echo_files") or []
+            params_te = params.get("te_ms") or []
+            if not echo_files or not params_te:
+                parser.error(
+                    f"params.json in {cdir} is missing `echo_files` / `te_ms`. "
+                    "Re-run `dicom_to_nifti.py` to regenerate it."
+                )
+            magnitude_entries = []
+            for fname in echo_files:
+                p = cdir / fname
+                if not p.exists():
+                    parser.error(f"Echo file missing: {p}")
+                magnitude_entries.append({"path": p})
+            if args.te_ms is not None:
+                if len(args.te_ms) != len(params_te):
+                    parser.error(
+                        f"--te_ms count ({len(args.te_ms)}) doesn't match "
+                        f"echoes in params.json ({len(params_te)})."
+                    )
+                te_values_ms = args.te_ms
+                print(f"Using user-supplied TEs (ms): {te_values_ms}")
+            else:
+                te_values_ms = params_te
+                print(f"TEs from params.json (ms): {te_values_ms}")
+        elif args.dicom_dir is not None:
             from data_utils import load_dicom_files
             dicom_path = Path(args.dicom_dir).resolve()
             if not dicom_path.is_dir():
@@ -179,7 +230,8 @@ def main():
         else:
             parser.error(
                 "when using direct CLI, provide one of: "
-                "--dicom_dir, --echo_files with --te_ms, or --echo_4d with --te_ms"
+                "--from_converted, --dicom_dir, "
+                "--echo_files with --te_ms, or --echo_4d with --te_ms"
             )
 
     print("\n==============================")

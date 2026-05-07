@@ -629,12 +629,6 @@ CUSTOM_CSS = """
     color: #9ca3af !important;
 }
 
-/* Tab body content — match section padding */
-.dr-input-tabs .tab-nav + div,
-.dr-input-tabs > div > div:not(.tab-nav) {
-    padding: 14px 18px !important;
-}
-
 /* Run Pipeline — green CTA, large, full-width */
 #dr-run-btn,
 #dr-run-btn button {
@@ -656,64 +650,6 @@ CUSTOM_CSS = """
 #dr-run-btn:active,
 #dr-run-btn button:active {
     background: #14532d !important;
-}
-
-
-/* Input-method tabs — bigger and more comfortable */
-.dr-input-tabs button[role="tab"] {
-    font-size: 1.2rem !important;
-    font-weight: 600 !important;
-    padding: 20px 36px !important;
-    border: 2px solid #9ca3af !important;
-    border-bottom: 2px solid #4b5563 !important;
-    border-radius: 10px 10px 0 0 !important;
-    background: #e5e7eb !important;
-    color: #374151 !important;
-    margin-right: 8px !important;
-    opacity: 1 !important;
-    box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.08) inset !important;
-    transition: all 0.15s ease !important;
-}
-.dr-input-tabs button[role="tab"]:hover {
-    background: #d1d5db !important;
-    color: #111827 !important;
-    border-color: #6b7280 !important;
-}
-.dr-input-tabs button[role="tab"][aria-selected="true"] {
-    background: #1d4ed8 !important;
-    color: #ffffff !important;
-    border-color: #1d4ed8 !important;
-    border-bottom: 2px solid #1d4ed8 !important;
-    box-shadow: 0 -3px 8px rgba(29, 78, 216, 0.35) !important;
-    transform: translateY(-1px) !important;
-}
-.dark .dr-input-tabs button[role="tab"] {
-    background: #374151 !important;
-    color: #e5e7eb !important;
-    border-color: #6b7280 !important;
-    border-bottom-color: #9ca3af !important;
-    box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.08) inset !important;
-}
-.dark .dr-input-tabs button[role="tab"]:hover {
-    background: #4b5563 !important;
-    color: #ffffff !important;
-    border-color: #9ca3af !important;
-}
-.dark .dr-input-tabs button[role="tab"][aria-selected="true"] {
-    background: #60a5fa !important;
-    color: #0b1220 !important;
-    border-color: #60a5fa !important;
-    border-bottom-color: #60a5fa !important;
-    box-shadow: 0 -3px 8px rgba(96, 165, 250, 0.45) !important;
-}
-/* Suppress Gradio's default orange accent underline on the selected tab */
-.dr-input-tabs button[role="tab"]::after,
-.dr-input-tabs button[role="tab"]::before,
-.dr-input-tabs button[role="tab"][aria-selected="true"]::after,
-.dr-input-tabs button[role="tab"][aria-selected="true"]::before {
-    display: none !important;
-    content: none !important;
-    background: none !important;
 }
 
 /* Make secondary buttons look clearly clickable instead of blending in (light mode) */
@@ -767,38 +703,28 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     accumulated = gr.State([])
 
     with gr.Column():
-        # ── 1. MRI Magnitudes (tabs) ──────────────────────────
+        # ── 1. MRI Magnitudes ─────────────────────────────────
         with gr.Accordion(
             "MRI Magnitudes", open=True,
             elem_classes=["dr-section", "dr-accordion"],
         ):
-            gr.Markdown("Multi-echo GRE magnitude images. Pick one input method below.")
-            with gr.Tabs(elem_classes="dr-input-tabs"):
-                with gr.Tab("📁 DICOM Folder") as tab_dicom:
-                    gr.Markdown(
-                        "Pick the folder of multi-echo GRE **magnitude** DICOMs — echoes, "
-                        "TE values, and slice ordering are read from headers automatically."
-                    )
-                    dicom_input = gr.UploadButton(
-                        "📁  Select DICOM Folder",
-                        file_count="directory",
-                        variant="primary",
-                    )
-                    dicom_info = gr.Markdown("")
-
-                with gr.Tab("📄 NIfTI / MAT files") as tab_nifti:
-                    gr.Markdown(
-                        "Pick pre-converted magnitudes — multiple 3D echoes (one file each) "
-                        "or a single 4D volume. Supported: `.nii`, `.nii.gz`, `.mat`. "
-                        "**You'll also need to enter Echo Times below.**"
-                    )
-                    magnitudes_input = gr.UploadButton(
-                        "📄  Add NIfTI / MAT Magnitudes",
-                        file_count="multiple",
-                        file_types=[".nii", ".nii.gz", ".gz", ".mat"],
-                        variant="primary",
-                    )
-                    magnitudes_info = gr.Markdown("")
+            gr.Markdown(
+                "Multi-echo GRE magnitude images — multiple 3D echoes (one file "
+                "each) or a single 4D volume. Supported: `.nii`, `.nii.gz`, `.mat`. "
+                "**Enter Echo Times below.**\n\n"
+                "Have raw DICOMs? Convert them locally first with "
+                "`python dicom_to_nifti.py --dicom_dir <folder>` "
+                "(see [DICOM → NIfTI conversion]"
+                "(https://github.com/sunhongfu/DeepRelaxo#dicom--nifti-conversion) "
+                "in the README), then upload the NIfTI files here."
+            )
+            magnitudes_input = gr.UploadButton(
+                "📄  Add NIfTI / MAT Magnitudes",
+                file_count="multiple",
+                file_types=[".nii", ".nii.gz", ".gz", ".mat"],
+                variant="primary",
+            )
+            magnitudes_info = gr.Markdown("")
 
         # ── 2. Processing Order ───────────────────────────────
         with gr.Accordion(
@@ -837,8 +763,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 "- Comma-separated values — one per echo, irregular spacings allowed "
                 "(e.g. `2.4, 3.6, 9.2, 20.8`).\n"
                 "- Compact `first_TE : spacing : count` for uniform spacing "
-                "(e.g. `3.5 : 4.4 : 8` → `3.5, 7.9, 12.3, 16.7, 21.1, 25.5, 29.9, 34.3`).\n\n"
-                "*Auto-filled when you use the DICOM Folder tab.*"
+                "(e.g. `3.5 : 4.4 : 8` → `3.5, 7.9, 12.3, 16.7, 21.1, 25.5, 29.9, 34.3`)."
             )
             te_ms = gr.Textbox(
                 show_label=False,
@@ -994,10 +919,6 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 f"⚠️ No supported files in this upload (rejected: {', '.join(rejected)})." if rejected else "",
                 _clear_btn_update(len(srt)),
             )
-        # Drop any DICOM-converted leftovers from the accumulated list — uploading
-        # via the NIfTI / MAT tab is treated as switching input source, not as
-        # appending to a previous DICOM run.
-        current = [p for p in current if not Path(p).name.startswith("dcm_converted_to_nii_e")]
         progress(0.5, desc=f"Merging into list (existing {len(current)} + new {len(new_paths)})…")
         new_names = {Path(p).name for p in new_paths}
         kept = [p for p in current if Path(p).name not in new_names]
@@ -1016,109 +937,6 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             )
         return (updated, srt or None, summary, None, gr.update(open=True), status,
                 _clear_btn_update(len(srt)))
-
-    def parse_dicom(files, progress=gr.Progress()):
-        # Outputs: accumulated, sorted_files, sorted_info, te_ms,
-        # magnitudes_input, dicom_input, dicom_info, order_group, clear_order_btn
-        if not files:
-            return (
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                None,
-                "",
-                gr.update(),
-                gr.update(),
-            )
-        raw_list = files if isinstance(files, list) else [files]
-
-        progress(0.05, desc=f"Reading {len(raw_list)} upload entry(ies)…")
-
-        # Expand any directories that arrived as a single entry.
-        file_paths = []
-        for f in raw_list:
-            p = _to_path(f)
-            if p is None:
-                continue
-            if p.is_dir():
-                file_paths.extend(str(c) for c in p.rglob("*") if c.is_file())
-            elif p.exists():
-                file_paths.append(str(p))
-
-        if not file_paths:
-            return (
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                None,
-                "❌ No readable files were found in the upload.",
-                gr.update(),
-                gr.update(),
-            )
-
-        if len(file_paths) == 1:
-            name = Path(file_paths[0]).name
-            return (
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                None,
-                (
-                    f"⚠️ Only one file was uploaded (`{name}`).\n\n"
-                    f"DeepRelaxo needs the **entire folder** of multi-echo DICOMs "
-                    f"(≥ 2 echoes). It looks like you navigated into the folder and "
-                    f"selected a single file by mistake.\n\n"
-                    f"**How to fix:** in the OS folder dialog, click the folder name "
-                    f"**once** in the file list (or in the side pane) and confirm — "
-                    f"don't enter the folder and click a file inside."
-                ),
-                gr.update(),
-                gr.update(),
-            )
-
-        progress(0.25, desc=f"Parsing {len(file_paths)} DICOM files…")
-
-        work_dir = Path(tempfile.mkdtemp(prefix="deeprelaxo_dicom_"))
-        try:
-            from data_utils import load_dicom_files
-            echoes = load_dicom_files(file_paths, work_dir)
-        except Exception as exc:
-            return (
-                gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                None,
-                f"❌ DICOM parsing failed:\n{exc}",
-                gr.update(),
-                gr.update(),
-            )
-
-        progress(0.95, desc="Building summary…")
-
-        nifti_paths = [str(e["nifti_path"]) for e in echoes]
-        te_str = ", ".join(f"{e['te_ms']:g}" for e in echoes)
-        # Use <pre> so the column-aligned layout survives Markdown rendering
-        # (otherwise newlines and indentation get collapsed).
-        name_w = max(len(Path(e["nifti_path"]).name) for e in echoes) + 2
-        body_lines = [f"✅ Parsed {len(echoes)} echoes from DICOM:"]
-        for i, e in enumerate(echoes, 1):
-            fname = Path(e["nifti_path"]).name
-            body_lines.append(
-                f"  Echo {i}:  {fname.ljust(name_w)}TE = {e['te_ms']:g} ms     shape {e['shape']}"
-            )
-        body_lines.append("")
-        body_lines.append(f"NIfTI files written to: {work_dir}")
-        info = (
-            "<pre style='font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; "
-            "white-space: pre; margin: 0; line-height: 1.5;'>"
-            + "\n".join(body_lines)
-            + "</pre>"
-        )
-        srt = _sort_paths(nifti_paths)
-        progress(1.0, desc="Done")
-        return (
-            nifti_paths,                # accumulated state
-            srt,                         # sorted_files
-            _shape_summary(srt),         # sorted_info
-            te_str,                      # te_ms
-            None,                        # magnitudes_input — clear
-            None,                        # dicom_input — clear
-            info,                        # dicom_info
-            gr.update(open=True),        # order_group — auto-expand
-            _clear_btn_update(len(srt)), # clear_order_btn — show
-        )
 
     def show_mask_info(mask, accumulated_paths):
         if mask is None:
@@ -1251,18 +1069,6 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
         inputs=[magnitudes_input, accumulated],
         outputs=[accumulated, sorted_files, sorted_info, magnitudes_input,
                  order_group, magnitudes_info, clear_order_btn],
-    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
-    dicom_input.click(
-        lambda: _RED_WAIT.format(
-            msg="⏳ Waiting for folder selection / upload — parsing will start once the file transfer completes…"
-        ),
-        outputs=dicom_info,
-    )
-    dicom_input.upload(
-        parse_dicom,
-        inputs=[dicom_input],
-        outputs=[accumulated, sorted_files, sorted_info, te_ms,
-                 magnitudes_input, dicom_input, dicom_info, order_group, clear_order_btn],
     ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
 
     run_btn.click(
