@@ -204,7 +204,7 @@ converted/
 ─────────────────────────────────────────────────────────
 ```
 
-`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_dir_string`) formatted exactly the way the web app's input field expects them. Open the JSON, copy the relevant string, paste into the form. Or skip the form and use `--from_converted` (auto-fills everything from the same JSON):
+`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_direction`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_direction_string`) formatted exactly the way the web app's input field expects them. Open the JSON, copy the relevant string, paste into the form. Or skip the form and use `--from_converted` (auto-fills everything from the same JSON):
 
 ```bash
 # CLI — auto-loads TEs and the magnitude NIfTI path from params.json:
