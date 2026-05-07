@@ -459,21 +459,14 @@ def _detect_echoes(paths):
 
 
 CUSTOM_CSS = """
-/* ── Global type scale — bump body / labels / info text for comfort ── */
+/* ── Global type scale — matches the iQSM / iQSM+ density ── */
 .gradio-container {
-    --text-xxs: 12px;
-    --text-xs: 13px;
-    --text-sm: 15px;
     --text-md: 17px;
-    --text-lg: 19px;
-    --text-xl: 22px;
-    --text-xxl: 26px;
     --block-info-text-size: 15px;
     --block-label-text-size: 16px;
     --block-title-text-size: 18px;
-    --section-text-size: 17px;
     font-size: 17px !important;
-    line-height: 1.55 !important;
+    line-height: 1.4 !important;
 }
 .gradio-container .prose,
 .gradio-container .prose p,
@@ -481,24 +474,21 @@ CUSTOM_CSS = """
 .gradio-container .markdown,
 .gradio-container .markdown p {
     font-size: 17px !important;
-    line-height: 1.6 !important;
+    line-height: 1.45 !important;
+    margin: 4px 0 6px 0 !important;
 }
 .gradio-container input,
 .gradio-container textarea,
-.gradio-container select {
-    font-size: 16px !important;
-}
-.gradio-container button {
-    font-size: 16px !important;
-}
+.gradio-container select { font-size: 16px !important; }
+.gradio-container button { font-size: 16px !important; }
 
-/* Section titles — coloured for quick scanning */
+/* Section titles — coloured for quick scanning, tightened margins */
 .gradio-container h3 {
     font-size: 1.4rem !important;
     padding: 4px 0 6px 14px !important;
     color: #1d4ed8 !important;
     border-left: 5px solid #1d4ed8 !important;
-    margin: 8px 0 14px 4px !important;
+    margin: 4px 0 8px 4px !important;
 }
 .dark .gradio-container h3 {
     color: #60a5fa !important;
@@ -519,8 +509,8 @@ CUSTOM_CSS = """
 .dr-accordion > div > .label-wrap,
 .dr-accordion button.label-wrap {
     border-left: 5px solid #1d4ed8 !important;
-    padding: 6px 0 6px 14px !important;
-    margin: 4px 0 8px 4px !important;
+    padding: 4px 0 4px 14px !important;
+    margin: 2px 0 6px 4px !important;
     background: transparent !important;
 }
 .dark .dr-accordion > .label-wrap,
@@ -584,10 +574,10 @@ CUSTOM_CSS = """
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30) !important;
 }
 
-/* Section panels — more breathing room, thicker visible borders */
+/* Section panels — denser layout to match iQSM / iQSM+ */
 .dr-section {
-    margin-bottom: 24px !important;
-    padding: 16px 20px !important;
+    margin-bottom: 14px !important;
+    padding: 10px 16px !important;
     border: 2px solid #4b5563 !important;
     border-radius: 10px !important;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08) !important;
@@ -606,7 +596,7 @@ CUSTOM_CSS = """
 }
 .dr-section .prose p,
 .dr-section .markdown p {
-    margin: 6px 0 8px 0 !important;
+    margin: 3px 0 5px 0 !important;
     padding-left: 4px !important;
 }
 .dr-section .prose ul,
@@ -614,11 +604,11 @@ CUSTOM_CSS = """
 .dr-section .markdown ul,
 .dr-section .markdown ol {
     padding-left: 28px !important;
-    margin: 6px 0 8px 0 !important;
+    margin: 3px 0 5px 0 !important;
 }
 .dr-section .prose li,
 .dr-section .markdown li {
-    margin: 3px 0 !important;
+    margin: 1px 0 !important;
 }
 
 /* Pull-quote / italic asides ("*Auto-filled when …*") */

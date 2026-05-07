@@ -164,35 +164,41 @@ If your data is a folder of raw DICOMs from a multi-echo GRE acquisition, conver
 
 ```bash
 python dicom_to_nifti.py --dicom_dir /path/to/dicom_folder
-# writes ./dicom_converted/{dcm_converted_to_nii_e*.nii, params.json}
+# writes ./dicom_converted/{dcm_converted_phase[_4d].nii.gz,
+#                            dcm_converted_magnitude[_4d].nii.gz,
+#                            params.json}
 
 python dicom_to_nifti.py --dicom_dir /path/to/dicom_folder \
                          --out_dir   ./my_subject_converted
 ```
 
-The converter:
-- walks the folder recursively (any extension or none — `.dcm`, `.ima`, `.dicom`, …);
-- filters to magnitude only via `ImageType`, with fall-backs to `ComplexImageComponent` and the GE private tag `(0043, 102f)` so unmarked GE DICOMs (where `ImageType = ORIGINAL/PRIMARY/OTHER`) still classify correctly;
-- groups by `EchoTime`, sorts each echo by `ImagePositionPatient` (fall-backs `SliceLocation` / `InstanceNumber`);
-- applies `RescaleSlope` / `RescaleIntercept`;
-- builds an LPS→RAS NIfTI affine and writes one NIfTI per echo (`dcm_converted_to_nii_e1.nii`, `e2.nii`, …);
-- writes a `params.json` with TE list (ms), voxel size (mm), and the echo filenames.
+The converter walks the folder recursively (any extension or none — `.dcm`, `.ima`, `.dicom`, …); splits DICOMs into modality buckets via `ImageType`, with fall-backs to `ComplexImageComponent` and the GE private tag `(0043, 102f)`; groups by `EchoTime`, sorts each echo by `ImagePositionPatient` (fall-backs `SliceLocation` / `InstanceNumber`); applies `RescaleSlope` / `RescaleIntercept`; builds an LPS→RAS NIfTI affine; and writes a 3D NIfTI per modality (or 4D for multi-echo) plus a `params.json`. Mixed-modality folders (magnitude + phase / real / imaginary) are accepted — DeepRelaxo only consumes the magnitude output, the rest is ignored.
 
-Mixed-modality folders (magnitude + phase / real / imaginary) are accepted — only magnitude is kept. Mixed-study folders, single-echo folders, or folders with **no magnitude DICOMs at all** are rejected with a clear error.
+After conversion you'll see a copy-paste-friendly summary:
 
-Then point the pipeline (or the web app) at the converted folder:
+```text
+─── Acquisition values (paste these into the web app) ───
+  Echo Times (ms)  : 4.9, 9.9, 14.8, 19.8, 24.7
+  Voxel size (mm)  : 1 1 1
+  B0 (Tesla)       : 3.0
+─────────────────────────────────────────────────────────
+```
+
+`params.json` carries machine-readable values (`te_ms`, `voxel_size_mm`, `b0_T`, `b0_dir`) and **copy-paste strings** (`te_ms_string`, `voxel_size_string`, `b0_dir_string`) formatted exactly the way the web app's input fields expect them. Open the JSON, copy the relevant string, paste into the form. Or skip the form and use `--from_converted` (auto-fills everything from the same JSON):
 
 ```bash
-# CLI:
+# CLI — auto-loads TEs, voxel size, magnitude path from params.json:
 python run_deeprelaxo_pipeline.py --from_converted ./dicom_converted \
                                   --mask BET_mask.nii
 
-# Web app:
-# upload the dcm_converted_to_nii_e*.nii files to "MRI Magnitudes"
-# (TEs are in params.json — paste them into the Echo Times box)
+# Web app — upload dcm_converted_magnitude[_4d].nii.gz to "MRI Magnitudes",
+# paste te_ms_string from params.json into the Echo Times field:
+python app.py
 ```
 
 > **Why isn't this in the web app?** Browsers don't handle thousand-file folder uploads well: tempfile creation per file hits the OS open-file limit (`OSError: Too many open files`), and the "Upload N files to this site?" prompt makes some users worry their data is being uploaded to a remote server. Running the converter locally avoids both — and DICOM → NIfTI is a one-time step, so re-running the pipeline after that is fast.
+
+> The **same `dicom_to_nifti.py` ships byte-identically with iQSM, iQSM+, and DeepRelaxo** — the script is independent of the downstream pipeline. Pick whichever copy is closest at hand; the output is generic enough for any of them (or any other QSM / R2* tool).
 
 ---
 

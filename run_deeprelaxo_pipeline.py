@@ -161,19 +161,19 @@ def main():
                     "folder with `dicom_to_nifti.py`?"
                 )
             params = json.loads(params_path.read_text())
-            echo_files = params.get("echo_files") or []
             params_te = params.get("te_ms") or []
-            if not echo_files or not params_te:
+            mag_nii = params.get("magnitude_nifti")
+            if not mag_nii or not params_te:
                 parser.error(
-                    f"params.json in {cdir} is missing `echo_files` / `te_ms`. "
-                    "Re-run `dicom_to_nifti.py` to regenerate it."
+                    f"params.json in {cdir} is missing `magnitude_nifti` / "
+                    "`te_ms`. Re-run `dicom_to_nifti.py` to regenerate it."
                 )
-            magnitude_entries = []
-            for fname in echo_files:
-                p = cdir / fname
-                if not p.exists():
-                    parser.error(f"Echo file missing: {p}")
-                magnitude_entries.append({"path": p})
+            mag_path = cdir / mag_nii
+            if not mag_path.exists():
+                parser.error(f"Magnitude file missing: {mag_path}")
+            # The unified converter writes a single magnitude NIfTI: 3D for
+            # single-echo, 4D for multi-echo. Feed it to the pipeline as 4D.
+            magnitude_4d_path = {"path": mag_path}
             if args.te_ms is not None:
                 if len(args.te_ms) != len(params_te):
                     parser.error(
