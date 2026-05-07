@@ -795,10 +795,10 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             elem_classes=["dr-section", "dr-accordion"],
         ) as order_group:
             gr.Markdown(
-                "Sets the order in which echoes are processed. **Only relevant when "
-                "you uploaded multiple 3D files (one per echo) for a multi-echo "
-                "dataset.** Files are sorted naturally by filename (`mag1`, `mag2`, "
-                "…, `mag10`); rename them if the auto-sort gets it wrong."
+                "Set the echo order when uploaded multiple 3D files (one per echo) "
+                "for a multi-echo dataset. Files are sorted naturally by filename "
+                "(`mag1`, `mag2`, …, `mag10`); rename them if the auto-sort gets it "
+                "wrong."
             )
             sorted_files = gr.File(
                 file_count="multiple",
