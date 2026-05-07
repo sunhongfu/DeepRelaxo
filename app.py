@@ -789,9 +789,9 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             )
             magnitudes_info = gr.Markdown("")
 
-        # ── 2. Echo Order ─────────────────────────────────────
+        # ── 2. Files Processing ───────────────────────────────
         with gr.Accordion(
-            "Echo Order", open=False,
+            "Files Processing", open=False,
             elem_classes=["dr-section", "dr-accordion"],
         ) as order_group:
             gr.Markdown(
@@ -1147,7 +1147,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
 
     magnitudes_input.click(
         lambda: _RED_WAIT.format(
-            msg="⏳ Waiting for file selection / upload — Echo Order will populate once the file transfer completes…"
+            msg="⏳ Waiting for file selection / upload — Files Processing will populate once the file transfer completes…"
         ),
         outputs=magnitudes_info,
     )
