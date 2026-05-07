@@ -258,6 +258,14 @@ def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size,
             job["step1_result"] = str(transformer_out / "R2s_transformer_mlp.nii")
             job["step1_image"] = _make_slice_image(job["step1_result"], vmin=vmin, vmax=vmax)
             job["depth"] = _volume_array(job["step1_result"]).shape[2]
+            # Brain-mask preview — lets the user verify orientation alignment
+            # against the magnitude-derived R2* maps once the run is done.
+            if mask_path:
+                job["mask_path"] = str(mask_path)
+                job["mask_image"] = _make_slice_image(str(mask_path), vmin=0, vmax=1)
+            else:
+                job["mask_path"] = None
+                job["mask_image"] = None
 
             print("\n============================")
             print("STEP 2: DENOISER")
@@ -302,7 +310,7 @@ def _result_files(job):
 
 
 def _state_and_slider_update(job):
-    state = (job.get("step1_result"), job.get("result_path"))
+    state = (job.get("step1_result"), job.get("result_path"), job.get("mask_path"))
     depth = job.get("depth")
     if depth and not job.get("_slider_init"):
         job["_slider_init"] = True
@@ -314,10 +322,13 @@ def _state_and_slider_update(job):
 
 
 def _visibility_updates(job):
+    has_mask = bool(job.get("mask_image"))
     return (
-        gr.update(visible=True),  # log_group — always visible while running
-        gr.update(visible=bool(_result_files(job))),  # results_group
-        gr.update(visible=bool(job.get("step1_image"))),  # viz_group
+        gr.update(visible=True),                              # log_group
+        gr.update(visible=bool(_result_files(job))),          # results_group
+        gr.update(visible=bool(job.get("step1_image"))),      # viz_group
+        gr.update(visible=has_mask),                          # mask_row
+        gr.update(visible=has_mask),                          # img_mask
     )
 
 
@@ -336,28 +347,33 @@ def _stream_job(job):
             break
         log += msg + "\n"
         state, slider = _state_and_slider_update(job)
-        log_v, res_v, viz_v = _visibility_updates(job)
+        v = _visibility_updates(job)
         yield (log, _result_files(job), _result_info_md(job),
                job.get("step1_image"), job.get("result_image"),
-               state, slider, log_v, res_v, viz_v)
+               job.get("mask_image"),
+               state, slider, *v)
     state, slider = _state_and_slider_update(job)
-    log_v, res_v, viz_v = _visibility_updates(job)
+    v = _visibility_updates(job)
     yield (log, _result_files(job), _result_info_md(job),
            job.get("step1_image"), job.get("result_image"),
-           state, slider, log_v, res_v, viz_v)
+           job.get("mask_image"),
+           state, slider, *v)
 
 
 def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
     _noop = (
-        None,           # result_file
-        "",             # result_info
-        None,           # img_step1
-        None,           # img_step2
-        (None, None),   # output_state
-        gr.update(),    # slice_slider
-        gr.update(visible=True),   # log_group — show error message
-        gr.update(visible=False),  # results_group
-        gr.update(visible=False),  # viz_group
+        None,                       # result_file
+        "",                         # result_info
+        None,                       # img_step1
+        None,                       # img_step2
+        None,                       # img_mask
+        (None, None, None),         # output_state (step1, result, mask)
+        gr.update(),                # slice_slider
+        gr.update(visible=True),    # log_group — show error message
+        gr.update(visible=False),   # results_group
+        gr.update(visible=False),   # viz_group
+        gr.update(visible=False),   # mask_row
+        gr.update(visible=False),   # img_mask visibility
     )
     try:
         te_list = _parse_te_input(te_ms_str)
@@ -758,7 +774,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
         ):
             gr.Markdown("Multi-echo GRE magnitude images. Pick one input method below.")
             with gr.Tabs(elem_classes="dr-input-tabs"):
-                with gr.Tab("📁 DICOM Folder  (recommended)") as tab_dicom:
+                with gr.Tab("📁 DICOM Folder") as tab_dicom:
                     gr.Markdown(
                         "Pick the folder of multi-echo GRE **magnitude** DICOMs — echoes, "
                         "TE values, and slice ordering are read from headers automatically."
@@ -770,7 +786,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                     )
                     dicom_info = gr.Markdown("")
 
-                with gr.Tab("📄 NIfTI / MAT files  (advanced)") as tab_nifti:
+                with gr.Tab("📄 NIfTI / MAT files") as tab_nifti:
                     gr.Markdown(
                         "Pick pre-converted magnitudes — multiple 3D echoes (one file each) "
                         "or a single 4D volume. Supported: `.nii`, `.nii.gz`, `.mat`. "
@@ -918,7 +934,18 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             with gr.Row():
                 vmin_input = gr.Number(value=0, label="Display window min (R2*, s⁻¹)", precision=2)
                 vmax_input = gr.Number(value=100, label="Display window max (R2*, s⁻¹)", precision=2)
-        output_state = gr.State((None, None))
+
+            # Brain mask preview (if a mask was supplied) — shares the slice
+            # slider so users can spot orientation mismatches against the R2*
+            # maps above.
+            with gr.Row(visible=False) as mask_row:
+                img_mask = gr.Image(
+                    label="Brain Mask (verify orientation matches R2* maps above)",
+                    show_download_button=False,
+                    show_fullscreen_button=False,
+                    height=300, visible=False,
+                )
+        output_state = gr.State((None, None, None))
 
         # ── 7. Results ─────────────────────────────────────────
         with gr.Accordion(
@@ -1241,15 +1268,23 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     run_btn.click(
         run_pipeline,
         inputs=[accumulated, te_ms, mask_file, batch_size, vmin_input, vmax_input],
-        outputs=[log_out, result_file, result_info, img_step1, img_step2,
-                 output_state, slice_slider, log_group, results_group, viz_group],
+        outputs=[log_out, result_file, result_info, img_step1, img_step2, img_mask,
+                 output_state, slice_slider,
+                 log_group, results_group, viz_group, mask_row, img_mask],
     )
 
     def render_slice(state, idx, vmin, vmax):
-        p1, p2 = state if state else (None, None)
+        if not state:
+            return None, None, None
+        p1 = state[0] if len(state) > 0 else None
+        p2 = state[1] if len(state) > 1 else None
+        pm = state[2] if len(state) > 2 else None
         img1 = _make_slice_image(p1, idx, vmin, vmax) if p1 else None
         img2 = _make_slice_image(p2, idx, vmin, vmax) if p2 else None
-        return img1, img2
+        # Mask is binary — render with fixed [0, 1] window, ignoring the user's
+        # R2* display window.
+        imgm = _make_slice_image(pm, idx, 0, 1) if pm else None
+        return img1, img2, imgm
 
     def step_slice(current, state, delta):
         if state is None or state[0] is None:
@@ -1260,21 +1295,11 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
     prev_btn.click(lambda c, s: step_slice(c, s, -1), inputs=[slice_slider, output_state], outputs=slice_slider)
     next_btn.click(lambda c, s: step_slice(c, s, +1), inputs=[slice_slider, output_state], outputs=slice_slider)
 
-    slice_slider.change(
-        render_slice,
-        inputs=[output_state, slice_slider, vmin_input, vmax_input],
-        outputs=[img_step1, img_step2],
-    )
-    vmin_input.change(
-        render_slice,
-        inputs=[output_state, slice_slider, vmin_input, vmax_input],
-        outputs=[img_step1, img_step2],
-    )
-    vmax_input.change(
-        render_slice,
-        inputs=[output_state, slice_slider, vmin_input, vmax_input],
-        outputs=[img_step1, img_step2],
-    )
+    _ri = [output_state, slice_slider, vmin_input, vmax_input]
+    _ro = [img_step1, img_step2, img_mask]
+    slice_slider.change(render_slice, inputs=_ri, outputs=_ro)
+    vmin_input.change(   render_slice, inputs=_ri, outputs=_ro)
+    vmax_input.change(   render_slice, inputs=_ri, outputs=_ro)
 
 def _find_free_port(preferred=7860, max_tries=20, host="127.0.0.1"):
     import socket
