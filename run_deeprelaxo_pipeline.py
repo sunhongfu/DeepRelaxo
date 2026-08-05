@@ -79,8 +79,14 @@ def main():
         ),
     )
     parser.add_argument('--te_ms', nargs='+', type=float)
-    parser.add_argument('--mask')
-    parser.add_argument('--bet_mask')
+    parser.add_argument('--mask',
+        help='Brain mask NIfTI. If omitted, one is generated automatically via '
+             'bet2 -- see --no_bet2 to disable.')
+    parser.add_argument('--bet_mask', help='Alias for --mask.')
+    parser.add_argument('--no_bet2', action='store_true',
+        help='Skip automatic bet2 brain extraction when no --mask is given '
+             '(estimate whole-head instead). Ignored if --mask/--bet_mask is '
+             'provided.')
     parser.add_argument('--transformer_out')
     parser.add_argument('--deeprelaxo_out')
     parser.add_argument('--transformer_batch_size', type=int)
@@ -129,6 +135,7 @@ def main():
         deeprelaxo_out = _resolve_path(config_dir, config.get("deeprelaxo_out", "deeprelaxo_outputs"))
         bet_mask = _resolve_path(data_dir, config.get("mask", config.get("bet_mask")))
         transformer_batch_size = int(config.get("transformer_batch_size", 50000))
+        no_bet2 = bool(config.get("no_bet2", False))
     else:
         # data_dir is optional in CLI mode — defaults to current working directory.
         # Relative paths in --echo_files / --echo_4d / --mask are resolved against
@@ -136,6 +143,7 @@ def main():
         data_dir = Path(args.data_dir) if args.data_dir else Path.cwd()
         mask_value = args.mask if args.mask is not None else args.bet_mask
         bet_mask = _resolve_path(data_dir, mask_value)
+        no_bet2 = bool(args.no_bet2)
         transformer_out = _resolve_path(Path.cwd(), args.transformer_out or "transformer_outputs")
         deeprelaxo_out = _resolve_path(Path.cwd(), args.deeprelaxo_out or "deeprelaxo_outputs")
         transformer_batch_size = int(args.transformer_batch_size or 50000)
@@ -233,6 +241,23 @@ def main():
                 "--from_converted, --dicom_dir, "
                 "--echo_files with --te_ms, or --echo_4d with --te_ms"
             )
+
+    # ── Automatic brain extraction (bet2), when no mask was explicitly given ──
+    # Magnitude is always required by this pipeline, so (unlike iQSM/iQSM_Plus)
+    # there's no case where auto-bet2 can't even attempt to run.
+    if bet_mask is None and not no_bet2:
+        from bet2_utils import run_bet2, first_3d_volume
+        print("No brain mask supplied -- running bet2 automatic brain extraction "
+              "on magnitude (use --no_bet2 to skip)...")
+        mag_for_bet2 = (str(magnitude_4d_path["path"]) if magnitude_4d_path
+                        else str(magnitude_entries[0]["path"]))
+        transformer_out.mkdir(parents=True, exist_ok=True)
+        mag_3d_path = first_3d_volume(mag_for_bet2, str(transformer_out))
+        bet2_mask = run_bet2(mag_3d_path, str(transformer_out))
+        if bet2_mask:
+            bet_mask = Path(bet2_mask)
+        else:
+            print("Continuing without a brain mask (whole-head).")
 
     print("\n==============================")
     print("STEP 1: ESTIMATOR")

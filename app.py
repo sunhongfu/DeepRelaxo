@@ -187,7 +187,7 @@ def _make_slice_image(nii_path, slice_idx=None, vmin=0, vmax=100, echo_idx=None)
 
 
 def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size,
-                      orig_echo_paths=None, orig_mask_path=None):
+                      orig_echo_paths=None, orig_mask_path=None, auto_bet2=True):
     print("============================")
     print("RUN CONFIGURATION")
     print("============================")
@@ -215,6 +215,8 @@ def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size
     cmd.append("--te_ms " + " ".join(str(t) for t in te_list))
     if mask_path:
         cmd.append(f"--mask {Path(mask_path).name}")
+    elif not auto_bet2:
+        cmd.append("--no_bet2")
     cmd.append(f"--transformer_batch_size {batch_size}")
     _sep = "-" * 56
     print()
@@ -227,7 +229,7 @@ def _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size
 
 
 def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size, vmin=0, vmax=100,
-                orig_echo_paths=None, orig_mask_path=None):
+                orig_echo_paths=None, orig_mask_path=None, auto_bet2=True):
     log_q = job["log_queue"]
     orig = sys.stdout
     sys.stdout = _QueueWriter(log_q, orig)
@@ -237,8 +239,21 @@ def _run_thread(job, work_dir, mode, echo_paths, te_list, mask_path, batch_size,
             transformer_out = work_dir / "transformer_outputs"
             deeprelaxo_out = work_dir / "deeprelaxo_outputs"
 
+            if mask_path is None and auto_bet2:
+                print("No brain mask supplied -- running bet2 automatic brain "
+                      "extraction on magnitude...")
+                from bet2_utils import run_bet2, first_3d_volume
+                transformer_out.mkdir(parents=True, exist_ok=True)
+                mag_3d_path = first_3d_volume(str(echo_paths[0]), str(transformer_out))
+                bet2_mask = run_bet2(mag_3d_path, str(transformer_out))
+                if bet2_mask:
+                    mask_path = Path(bet2_mask)
+                else:
+                    print("Continuing without a brain mask (whole-head).")
+
             _print_run_config(work_dir, mode, echo_paths, te_list, mask_path, batch_size,
-                              orig_echo_paths=orig_echo_paths, orig_mask_path=orig_mask_path)
+                              orig_echo_paths=orig_echo_paths, orig_mask_path=orig_mask_path,
+                              auto_bet2=auto_bet2)
 
             print("============================")
             print("STEP 1: ESTIMATOR")
@@ -413,7 +428,7 @@ def _stream_job(job):
            state, slider, *v)
 
 
-def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
+def run_pipeline(echo_files, te_ms_str, mask_file, auto_bet2, batch_size, vmin, vmax):
     _noop = (
         None,                       # result_file
         "",                         # result_info
@@ -489,7 +504,7 @@ def run_pipeline(echo_files, te_ms_str, mask_file, batch_size, vmin, vmax):
     threading.Thread(
         target=_run_thread,
         args=(job, work_dir, pipeline_mode, echo_paths, te_list, mask_path, int(batch_size), float(vmin), float(vmax),
-              orig_echo_paths, orig_mask_path),
+              orig_echo_paths, orig_mask_path, bool(auto_bet2)),
         daemon=True,
     ).start()
 
@@ -843,8 +858,11 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             elem_classes=["dr-section", "dr-accordion"],
         ) as mask_group:
             gr.Markdown(
-                "Optional — if omitted, **all voxels are processed**, which is "
-                "significantly slower than processing only the masked brain-tissue region.\n\n"
+                "Optional — if you don't upload one, one is **generated "
+                "automatically via bet2** when you click Run (uncheck the box "
+                "below to skip that). Without any mask at all, **all voxels are "
+                "processed**, which is significantly slower than processing only "
+                "the masked brain-tissue region.\n\n"
                 "Supported: `.nii`, `.nii.gz`, `.mat`"
             )
             mask_button = gr.UploadButton(
@@ -872,6 +890,12 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
                 variant="stop",
                 visible=False,
                 elem_id="dr-mask-clear-btn",
+            )
+            auto_bet2_cb = gr.Checkbox(
+                label="Auto brain-extract via bet2 if no mask is uploaded",
+                value=True,
+                info="Runs FSL's bet2 on the first magnitude echo when no mask is "
+                     "supplied above. Ignored once you upload a mask directly.",
             )
 
         # ── 5. Hyper-parameters (collapsed by default) ────────
@@ -1161,7 +1185,7 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
 
     run_btn.click(
         run_pipeline,
-        inputs=[accumulated, te_ms, mask_file, batch_size, vmin_input, vmax_input],
+        inputs=[accumulated, te_ms, mask_file, auto_bet2_cb, batch_size, vmin_input, vmax_input],
         outputs=[log_out, result_file, result_info, img_step1, img_step2,
                  img_mag, img_mask,
                  output_state, slice_slider,

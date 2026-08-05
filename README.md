@@ -24,6 +24,8 @@ This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade
 - `dicom_to_nifti.py` — standalone, self-contained DICOM → NIfTI converter. Byte-identical with the copies in iQSM and iQSM+; writes a single magnitude NIfTI (3D / 4D) plus a `params.json` ready for `--from_converted`.
 - `data_utils.py` — NIfTI / MAT / DICOM loaders and shape utilities (the in-repo magnitude-only DICOM loader is what `run_deeprelaxo_pipeline.py --dicom_dir` uses; for new workflows prefer the standalone `dicom_to_nifti.py`).
 - `transformer_mlp_model.py` and `unet3d_model.py` — model architectures.
+- `bet2_utils.py` — automatic brain-mask generation via `vendor/bet2/`, used by `run_deeprelaxo_pipeline.py` / `app.py` when no mask is supplied.
+- `vendor/bet2/` — FSL's `bet2` binary + its runtime shared libraries, vendored directly (not a full FSL install). Same copy as `iQSM_Plus` and `iQSM`.
 
 ---
 
@@ -261,11 +263,11 @@ A single textbox accepts two equivalent formats:
 - **Compact `first_TE : spacing : count`** — uniform spacing only: `4.9 : 5 : 5` expands to `4.9, 9.9, 14.8, 19.8, 24.7`
 
 #### 4. Brain Mask *(optional)*
-Click **Select Brain Mask** to provide a BET (or any binary) mask. Supported: `.nii`, `.nii.gz`, `.mat` (v5 or v7.3).
+Click **Select Brain Mask** to provide a BET (or any binary) mask yourself. Supported: `.nii`, `.nii.gz`, `.mat` (v5 or v7.3).
 
 After upload, the field shows: `Loaded: BET_mask.nii · Shape: 192 × 256 × 176 · dtype: uint8 · ✓ matches magnitudes`. If the mask shape doesn't match the spatial dims of your magnitudes, you get a clear warning so you can fix it before running.
 
-Click **✕ Remove Brain Mask** to clear it. **Without a mask, all voxels are processed** — significantly slower than processing only the masked brain region.
+Click **✕ Remove Brain Mask** to clear it. If you don't upload one, one is **generated automatically via bet2** ([FSL's Brain Extraction Tool](https://fsl.fmrib.ox.ac.uk/fsl/docs/#/structural/bet), vendored at `vendor/bet2/`) when you click Run — uncheck **"Auto brain-extract via bet2 if no mask is uploaded"** to skip that. **Without any mask at all, all voxels are processed** — significantly slower than processing only the masked brain region.
 
 #### 5. Hyper-parameters *(collapsed by default)*
 **Voxel Batch Size** — defaults to 50,000. Reduce if you run out of GPU memory.
@@ -386,7 +388,7 @@ python run_deeprelaxo_pipeline.py \
 - `data_dir`, `transformer_out`, and `deeprelaxo_out` are resolved relative to the config file.
 - Echo file and mask paths are resolved relative to `data_dir`. **Absolute paths are kept verbatim** (so you can mix files from different folders).
 - `--data_dir` is **optional in direct CLI mode** — defaults to the current working directory if omitted.
-- If `mask` is omitted, an all-ones mask is used.
+- If `mask` is omitted, one is generated automatically via bet2 ([FSL's Brain Extraction Tool](https://fsl.fmrib.ox.ac.uk/fsl/docs/#/structural/bet), vendored at `vendor/bet2/`) run on the first magnitude echo; `--no_bet2` (or `no_bet2: true` in a YAML config) reconstructs whole-head (all-ones mask) instead.
 - Default `transformer_batch_size` is `50000`; reduce if GPU memory is limited.
 - Checkpoints are loaded from `checkpoints/transformer_mlp_epoch_80.pth` and `checkpoints/unet3d_epoch_140.pth`.
 
