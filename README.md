@@ -6,7 +6,7 @@
 
 This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade: an estimator stage based on Transformer-MLP followed by a denoiser stage based on 3D-UNet.
 
-**Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Quick Start](#quick-start) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples)
+**Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Quick Start](#quick-start) · [Docker](#docker) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples)
 
 ## Highlights
 
@@ -26,6 +26,7 @@ This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade
 - `transformer_mlp_model.py` and `unet3d_model.py` — model architectures.
 - `bet2_utils.py` — automatic brain-mask generation via `vendor/bet2/`, used by `run_deeprelaxo_pipeline.py` / `app.py` when no mask is supplied.
 - `vendor/bet2/` — FSL's `bet2` binary + its runtime shared libraries, vendored directly (not a full FSL install). Same copy as `iQSM_Plus` and `iQSM`.
+- `Dockerfile` — self-contained image (Python env, checkpoints, bet2 all baked in) -- see [Docker](#docker).
 
 ---
 
@@ -157,7 +158,33 @@ DeepRelaxo/
 
 ### 4. Run
 
-Choose the web app (recommended) or the command-line interface.
+Choose the web app (recommended) or the command-line interface -- natively, or via [Docker](#docker) if you'd rather not set up a Python environment (also the only way to get automatic bet2 brain extraction on Windows or macOS, since `vendor/bet2/` is a Linux/x86_64 binary that can't execute natively there).
+
+---
+
+## Docker
+
+Builds a self-contained image (Python env, checkpoints, and bet2 all baked in) that runs the same way on Windows, macOS, or Linux -- Docker Desktop runs a real Linux VM on all three, which is what lets `vendor/bet2/`'s Linux/x86_64 binary actually execute regardless of host OS.
+
+```bash
+# Build (from this repo's root; needs network access -- checkpoints are downloaded
+# during the build). --platform linux/amd64 is required explicitly on Apple Silicon
+# hosts (see the Dockerfile's header comment for why).
+docker build --platform linux/amd64 -t deeprelaxo .
+
+# Run the web app (default) -- open http://localhost:7860 in your browser
+docker run --rm -p 7860:7860 deeprelaxo
+
+# With GPU acceleration (needs the NVIDIA Container Toolkit on the host)
+docker run --rm --gpus all -p 7860:7860 deeprelaxo
+
+# Run the CLI instead, e.g. against a folder of NIfTIs already on the host
+docker run --rm -v /path/to/data:/data deeprelaxo \
+    python3 run_deeprelaxo_pipeline.py --from_converted /data/converted \
+    --transformer_out /data/transformer_out --deeprelaxo_out /data/deeprelaxo_out
+```
+
+CPU-only hosts work too (just slower) -- drop `--gpus all` entirely, no other changes needed. See the [Dockerfile](Dockerfile) itself for the full annotated build. If bet2 isn't found (checked `$BET2_DIR`, `/opt/bet2`, `./vendor/bet2`) or fails to run, estimation still completes without a mask (all voxels processed) rather than failing.
 
 ---
 

@@ -1,0 +1,19 @@
+.git
+.claude
+demo
+__pycache__
+*.pyc
+*.DS_Store
+
+# Re-downloaded inside the image during `docker build` (see Dockerfile) -- a locally
+# downloaded copy would just be dead weight in the build-context upload.
+checkpoints/*.pth
+transformer_outputs/
+deeprelaxo_outputs/
+dicom_converted*/
+*.dcm
+*.IMA
+*.ima
+*.dicom
+*.nii
+*.nii.gz
