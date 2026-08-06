@@ -788,23 +788,33 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
             "GRE Magnitudes", open=True,
             elem_classes=["dr-section", "dr-accordion"],
         ):
-            gr.Markdown(
-                "Multi-echo GRE magnitude images — multiple 3D echoes (one file "
-                "each) or a single 4D volume. Supported: `.nii`, `.nii.gz`, `.mat`. "
-                "**Enter Echo Times below.**\n\n"
-                "Have raw DICOMs? Convert them locally first with "
-                "`python dicom_to_nifti.py --dicom_dir <folder>` "
-                "(see [DICOM → NIfTI conversion]"
-                "(https://github.com/sunhongfu/DeepRelaxo#dicom--nifti-conversion) "
-                "in the README), then upload the NIfTI files here."
-            )
-            magnitudes_input = gr.UploadButton(
-                "📄  Add NIfTI / MAT Magnitudes",
-                file_count="multiple",
-                file_types=[".nii", ".nii.gz", ".gz", ".mat"],
-                variant="primary",
-            )
-            magnitudes_info = gr.Markdown("")
+            with gr.Tabs():
+                with gr.Tab("DICOM Folder"):
+                    gr.Markdown(
+                        "Select a folder of raw multi-echo GRE **magnitude** DICOMs "
+                        "(sub-folders OK, extra non-magnitude files are ignored) -- "
+                        "echoes and TEs are detected automatically from the DICOM "
+                        "headers, no separate conversion step needed."
+                    )
+                    dicom_input = gr.UploadButton(
+                        "📁  Select DICOM Folder",
+                        file_count="directory",
+                        variant="primary",
+                    )
+                    dicom_info = gr.Markdown("")
+                with gr.Tab("NIfTI / MAT"):
+                    gr.Markdown(
+                        "Multi-echo GRE magnitude images already converted to NIfTI/MAT "
+                        "-- multiple 3D echoes (one file each) or a single 4D volume. "
+                        "Supported: `.nii`, `.nii.gz`, `.mat`. **Enter Echo Times below.**"
+                    )
+                    magnitudes_input = gr.UploadButton(
+                        "📄  Add NIfTI / MAT Magnitudes",
+                        file_count="multiple",
+                        file_types=[".nii", ".nii.gz", ".gz", ".mat"],
+                        variant="primary",
+                    )
+                    magnitudes_info = gr.Markdown("")
 
         # ── 2. Files Processing ───────────────────────────────
         with gr.Accordion(
@@ -1049,6 +1059,45 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
         return (updated, srt or None, summary, None, gr.update(open=True), status,
                 _clear_btn_update(len(srt)))
 
+    def add_dicom_folder(new_files, current, progress=gr.Progress()):
+        """Parse an uploaded DICOM folder (data_utils.load_dicom_files handles
+        grouping by EchoTime and sorting by slice position -- directory structure
+        doesn't matter, it just needs a flat list of file paths) and replace the
+        current magnitude list with the resulting per-echo NIfTIs. A replace,
+        not a merge like add_files above -- mixing DICOM-derived echoes with
+        separately uploaded NIfTI echoes would give an ambiguous TE association.
+        """
+        srt = _sort_paths(current) if current else []
+        _noop = (current, srt or None, _shape_summary(srt), gr.update(), gr.update(),
+                 "", _clear_btn_update(len(srt)), gr.update())
+        if not new_files:
+            return _noop
+        files = new_files if isinstance(new_files, list) else [new_files]
+        progress(0.05, desc=f"Reading {len(files)} uploaded file(s)…")
+        file_paths = [str(p) for p in (_to_path(f) for f in files) if p is not None]
+        try:
+            from data_utils import load_dicom_files
+            progress(0.15, desc=f"Parsing {len(file_paths)} DICOM file(s) -- this can "
+                                 f"take a while for large studies…")
+            work_dir = tempfile.mkdtemp(prefix="deeprelaxo_dicom_")
+            echoes = load_dicom_files(file_paths, work_dir)
+        except Exception as exc:
+            gr.Warning(f"DICOM conversion failed: {exc}")
+            return (current, srt or None, _shape_summary(srt), gr.update(), gr.update(),
+                    f"❌ {exc}", _clear_btn_update(len(srt)), gr.update())
+        progress(0.9, desc="Finalizing…")
+        new_paths = [str(e["nifti_path"]) for e in echoes]
+        te_values = [e["te_ms"] for e in echoes]
+        te_str = ", ".join(f"{t:g}" for t in te_values)
+        status = (
+            f"✅ Converted {len(echoes)} echo(es) from {len(file_paths)} DICOM file(s) "
+            "-- replaced previous magnitude list:\n\n"
+            + "\n".join(f"- Echo {i + 1}: TE = {t:g} ms" for i, t in enumerate(te_values))
+        )
+        progress(1.0, desc="Done")
+        return (new_paths, new_paths, _shape_summary(new_paths), None,
+                gr.update(open=True), status, _clear_btn_update(len(new_paths)), te_str)
+
     def show_mask_info(mask, accumulated_paths):
         if mask is None:
             return ""
@@ -1181,6 +1230,21 @@ with gr.Blocks(title="DeepRelaxo", analytics_enabled=False) as app:
         inputs=[magnitudes_input, accumulated],
         outputs=[accumulated, sorted_files, sorted_info, magnitudes_input,
                  order_group, magnitudes_info, clear_order_btn],
+    ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
+
+    dicom_input.click(
+        lambda: _RED_WAIT.format(
+            msg="⏳ Waiting for folder selection / upload — this can take a while for "
+                "large studies. Files Processing and Echo Times will populate once the "
+                "upload and DICOM parsing complete…"
+        ),
+        outputs=dicom_info,
+    )
+    dicom_input.upload(
+        add_dicom_folder,
+        inputs=[dicom_input, accumulated],
+        outputs=[accumulated, sorted_files, sorted_info, dicom_input,
+                 order_group, dicom_info, clear_order_btn, te_ms],
     ).then(show_mask_info, inputs=[mask_file, accumulated], outputs=mask_info)
 
     run_btn.click(

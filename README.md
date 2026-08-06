@@ -11,7 +11,7 @@ This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade
 ## Highlights
 
 - **NIfTI / MAT input** — multiple 3D echoes or a single 4D volume (`.nii`, `.nii.gz`, `.mat` v5/v7.3 all supported).
-- **DICOM → NIfTI converter** — standalone `dicom_to_nifti.py` (byte-identical with the copies in iQSM and iQSM+). One folder or many (`--dicom_dir A B …`); auto-classifies by `ImageType` / `ComplexImageComponent` / GE private tag `(0043, 102f)`; writes a single NIfTI per modality (3D for single-echo, 4D for multi-echo) plus a `params.json` ready for `--from_converted`. Modality flags (`--phase_dir`, `--mag_dir`, …) are a rescue path for mis-tagged DICOMs. Mixed-modality folders are fine — DeepRelaxo only consumes the magnitude output.
+- **DICOM folder input, no separate conversion step** — the web app's DICOM Folder tab (and the CLI's `--dicom_dir`) walks a folder (sub-folders OK, mixed modalities OK) straight from the browser/command line, groups by the `EchoTime` tag, and auto-fills TEs. The standalone `dicom_to_nifti.py` (byte-identical with the copies in iQSM and iQSM+) is also still available for converting once and reusing the NIfTIs across multiple runs, or batch-scripting many subjects; see [DICOM → NIfTI conversion](#dicom--nifti-conversion).
 - **Browser-based UI** — collapsible sections, live progress, slice slider, shape verification (echo-to-echo and mask-vs-magnitudes), brain-mask preview alongside the R2* maps, per-run "equivalent CLI command" log entry, port auto-fallback (`7860 → 7861 → …`), and SSH-aware launch (the auto-open browser step is skipped on remote hosts and a port-forward hint is printed instead).
 - **Two outputs** — Step 1 (`R2s_transformer_mlp.nii`) is downloadable as soon as it's ready; Step 2 (`R2s_deeprelaxo.nii`) finalises afterwards.
 
@@ -190,7 +190,7 @@ CPU-only hosts work too (just slower) -- drop `--gpus all` entirely, no other ch
 
 ## DICOM → NIfTI conversion
 
-If your data is a folder of raw DICOMs from a multi-echo GRE acquisition, convert it once with the standalone script before running DeepRelaxo. The script is **byte-identical with the copies in iQSM and iQSM+** — independent of the downstream pipeline. Pick whichever repo's copy is closest at hand.
+If your data is a folder of raw DICOMs from a multi-echo GRE acquisition, the [web app](#web-app)'s **DICOM Folder** tab handles conversion automatically -- no separate step needed for a normal single-run use case. This section covers the standalone script, useful when you want to convert once and reuse the NIfTIs across multiple runs (CLI or web app), or when scripting a batch of subjects. The script is **byte-identical with the copies in iQSM and iQSM+** — independent of the downstream pipeline. Pick whichever repo's copy is closest at hand.
 
 ### Two modes
 
@@ -265,17 +265,17 @@ The app picks port `7860` by default; if it's busy, it falls back automatically 
 
 The page is organised top-to-bottom; each section is a collapsible accordion.
 
-#### 1. MRI Magnitudes
+#### 1. GRE Magnitudes
 
-Click **Add NIfTI / MAT Magnitudes** and pick:
+Two tabs, either one populates the same magnitude list below:
+
+**DICOM Folder** (recommended for raw scanner data) — click **Select DICOM Folder** and pick a folder of raw multi-echo GRE magnitude DICOMs in your OS's native folder picker; sub-folders are walked automatically, and any non-magnitude files (phase, localizers, etc.) mixed in are silently ignored. Echoes are grouped by the `EchoTime` DICOM tag, slices sorted by `ImagePositionPatient`, converted to per-echo NIfTIs, and the detected TEs auto-fill the **Echo Times** field below -- no separate script or manual TE entry needed. Large studies (hundreds to low thousands of files) take anywhere from several seconds to a couple of minutes to upload and parse; progress is shown during both phases. Selecting a new DICOM folder **replaces** the current magnitude list (rather than merging), since mixing DICOM-derived echoes with separately uploaded NIfTI echoes would give an ambiguous TE association.
+
+**NIfTI / MAT** — click **Add NIfTI / MAT Magnitudes** and pick:
 - multiple 3D files (one per echo) — `.nii`, `.nii.gz`, or `.mat`; or
 - a single 4D volume of shape `(X, Y, Z, n_echoes)`.
 
-Files with unsupported extensions are dropped with a Gradio warning toast. You can add files in batches.
-
-`.mat` files are accepted in **both v5 (default `save`) and v7.3 (`save -v7.3`)** formats; each `.mat` file must contain exactly one numeric array.
-
-> **Have raw DICOMs?** The web app deliberately doesn't accept whole DICOM folders — uploading thousands of files through a browser is unreliable (file-handle exhaustion, mid-transfer drops) and the privacy prompts confuse users. Convert them locally with [`dicom_to_nifti.py`](#dicom--nifti-conversion) instead, then upload the resulting NIfTI files here.
+Files with unsupported extensions are dropped with a Gradio warning toast. You can add files in batches. `.mat` files are accepted in **both v5 (default `save`) and v7.3 (`save -v7.3`)** formats; each `.mat` file must contain exactly one numeric array. Enter Echo Times yourself in this mode (not auto-detected, unlike the DICOM tab). If you'd rather convert DICOMs to NIfTI ahead of time (e.g. to reuse the same converted files across multiple runs), [`dicom_to_nifti.py`](#dicom--nifti-conversion) is still available standalone.
 
 #### 2. Processing Order
 Lists every magnitude file that will be fed to the pipeline (sorted in natural numeric order: `mag1`, `mag2`, …, `mag10`). Below the list, a one-line shape summary tells you whether all files share the same volume dimensions — and if not, lists each per-file shape so you can spot the outlier.
