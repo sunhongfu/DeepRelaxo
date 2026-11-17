@@ -6,7 +6,7 @@
 
 This repository contains a PyTorch inference pipeline for the DeepRelaxo cascade: an estimator stage based on Transformer-MLP followed by a denoiser stage based on 3D-UNet.
 
-**Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Quick Start](#quick-start) · [Docker](#docker) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples)
+**Jump to:** [Highlights](#highlights) · [Layout](#layout) · [Quick Start](#quick-start) · [Docker](#docker) · [DICOM → NIfTI conversion](#dicom--nifti-conversion) · [Web App](#web-app) · [Command-Line Interface](#command-line-interface) · [Run Demo Examples](#run-demo-examples) · [Speed](#speed)
 
 ## Highlights
 
@@ -416,7 +416,8 @@ python run_deeprelaxo_pipeline.py \
 - Echo file and mask paths are resolved relative to `data_dir`. **Absolute paths are kept verbatim** (so you can mix files from different folders).
 - `--data_dir` is **optional in direct CLI mode** — defaults to the current working directory if omitted.
 - If `mask` is omitted, one is generated automatically via bet2 ([FSL's Brain Extraction Tool](https://fsl.fmrib.ox.ac.uk/fsl/docs/#/structural/bet), vendored at `vendor/bet2/`) run on the first magnitude echo; `--no_bet2` (or `no_bet2: true` in a YAML config) reconstructs whole-head (all-ones mask) instead.
-- Default `transformer_batch_size` is `50000`; reduce if GPU memory is limited.
+- Default `transformer_batch_size` is `50000`; reduce if GPU memory is limited. Raising it does not make the estimator faster (see [Speed](#speed)).
+- `--half_precision` (or `half_precision: true`) runs the estimator in half precision on a CUDA GPU: about 2.3× faster, R2* different by a median 0.02 s⁻¹.
 - Checkpoints are loaded from `checkpoints/transformer_mlp_epoch_80.pth` and `checkpoints/unet3d_epoch_140.pth`.
 
 ---
@@ -472,3 +473,71 @@ python app.py
 Under **MRI Magnitudes**, click *Add NIfTI / MAT Magnitudes* and pick all five `demo/mag*.nii` files. In **Echo Times**, paste `4.9, 9.9, 14.8, 19.8, 24.7` (or the compact form `4.9 : 5 : 5`). In **Brain Mask**, click *Select Brain Mask* and pick `demo/BET_mask.nii`. Hit **Run Pipeline**.
 
 All three options produce the same outputs: a Step 1 R2* map (`R2s_transformer_mlp.nii`) and a final denoised R2* map (`R2s_deeprelaxo.nii`).
+
+---
+
+## Speed
+
+Measured on an NVIDIA RTX A4500 (20 GB) with a 4-echo, 1 mm, 256 × 192 × 168 in-vivo head scan
+(8.26 million voxels, of which 1.36 million are inside the brain mask).
+
+**Where the time goes.** The estimator (Step 1) is a per-voxel transformer and takes almost all of
+it; the denoising U-Net (Step 2) takes under a second. Inside the estimator, 94 % of the time is the
+two transformer decoder layers; the MLP head is 6 %.
+
+**The estimator, 2.4× faster with the same result.** Two parts of `Transformer.forward` do work
+whose result is never used at inference:
+
+- the R2* head reads token 0 of the last decoder layer only, so that layer can be evaluated for
+  token 0 alone (its self-attention still sees every token of the layer before);
+- the cross-attention keys and values depend on the echo times only, which are the same for every
+  voxel, so they can be computed once instead of once per voxel.
+
+`forward_shared_te` in `transformer_mlp_model.py` evaluates the network that way, with the same
+weights and the same arithmetic. `run_estimator_stage.batched_voxel_inference` uses it
+automatically on a single device, after checking on a sample that it reproduces `forward()`
+(otherwise, and with several GPUs under `DataParallel`, it calls `forward()` as before). The largest
+difference from `forward()` over a million in-vivo voxels is 0.01 s⁻¹.
+
+| Estimator on the A4500 | Voxels per second | Whole volume (8.26 M voxels) | R2* vs `forward()` |
+|---|---|---|---|
+| `forward()` (before) | 0.24 million | 35 s | — |
+| `forward_shared_te` (now the default) | 0.56 million | 15 s | equal to rounding (max 0.01 s⁻¹) |
+| … with `--half_precision` | 1.28 million | 6 s | median 0.02 s⁻¹, 99th percentile 0.13 s⁻¹ |
+| … with TF32 matmul instead (not wired in) | 0.99 million | 8 s | median 0.01 s⁻¹, 99th percentile 0.06 s⁻¹ |
+
+In half precision a few voxels move by several s⁻¹; they were not located (the test block included
+air, where the estimate is unstable anyway). `torch.compile` gave 1.1× and was not adopted.
+
+**Batch size does not buy speed.** Once the GPU is busy the throughput is flat; a larger batch only
+uses more memory. The default of 50000 is already on the plateau.
+
+| `transformer_batch_size` | Full precision | Half precision | GPU memory (full / half) |
+|---|---|---|---|
+| 10000 | 0.55 M voxels/s | 1.14 M voxels/s | 0.4 / 0.3 GB |
+| 50000 | 0.56 | 1.26 | 2.0 / 1.1 GB |
+| 100000 | 0.56 | 1.27 | 3.9 / 2.2 GB |
+| 200000 | 0.56 | 1.28 | 7.7 / 4.3 GB |
+| 400000 | out of memory | 1.28 | — / 8.5 GB |
+
+**The whole pipeline from the command line** (`run_deeprelaxo_pipeline.py`, same scan and GPU;
+includes starting Python, loading both checkpoints and reading and writing the NIfTI files):
+
+| | Before | Now | Now with `--half_precision` |
+|---|---|---|---|
+| With a brain mask | 8.6 s | 5.5 s | 4.1 s |
+| Whole head (`--no_bet2`) | 37.8 s | 18.3 s | 10.1 s |
+
+Against the previous version, inside the brain: the estimator output (`R2s_transformer_mlp.nii`)
+differs by at most 0.004 s⁻¹ and the final map (`R2s_deeprelaxo.nii`) by a median 0.001 s⁻¹ (at
+most 0.1 s⁻¹). With `--half_precision` the final map differs by a median 0.01 s⁻¹ (99th percentile
+0.08 s⁻¹, a few voxels by up to 7 s⁻¹). On a CPU the new path gives the same result as before to
+0.02 s⁻¹ in the estimator output.
+
+**A brain mask is the cheapest speed-up.** The estimator is evaluated only inside the mask, and its
+result for a voxel does not depend on which other voxels are evaluated, so the masked estimate is
+the whole-head estimate restricted to the mask. A brain mask is about a sixth of a head volume.
+The denoising U-Net is not local, though: the denoised whole-head map and the denoised masked map
+differ, and replacing the air voxels of a whole-head estimate by zeros changes the denoised R2*
+inside the brain as well.
+

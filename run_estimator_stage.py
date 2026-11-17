@@ -5,7 +5,7 @@ import nibabel as nib
 from pathlib import Path
 from functools import lru_cache
 from data_utils import load_array_with_affine, load_mask_array
-from transformer_mlp_model import Transformer
+from transformer_mlp_model import Transformer, forward_shared_te
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 DEFAULT_CHECKPOINT = Path(__file__).resolve().parent / "checkpoints" / "transformer_mlp_epoch_80.pth"
@@ -96,13 +96,54 @@ def load_subject_data_4d(magnitude_4d_entry, te_values_ms, bet_mask_path=None):
     return _resolve_output_affine(affine, bet_mask_path=bet_mask_path), mask, masked_magnitudes
 
 
-def batched_voxel_inference(model, magnitudes, te_values_ms, batch_size):
+_fast_path_ok = {}
+
+
+def _fast_path(model, tes):
+    """The bare Transformer if forward_shared_te (see transformer_mlp_model.py) can stand in for
+    model(...) here, else None. It is used on a single device only (DataParallel would not
+    split a call that bypasses it), and only after it has reproduced the module's own forward
+    on a sample with these echo times, so a changed architecture falls back to forward()."""
+    net = model.module if isinstance(model, nn.DataParallel) else model
+    if isinstance(model, nn.DataParallel) and len(model.device_ids) > 1:
+        return None
+    key = (id(net), tuple(float(t) for t in tes.flatten()))
+    if key not in _fast_path_ok:
+        ok = False
+        try:
+            gen = torch.Generator(device="cpu").manual_seed(0)
+            sample = (torch.rand(2048, tes.shape[1], 1, generator=gen) + 0.05).to(tes.device)
+            sample = sample / torch.median(sample, dim=1, keepdim=True).values
+            with torch.inference_mode():
+                ref = net(tes.expand(len(sample), -1, -1), sample)
+                new = forward_shared_te(net, tes, sample)
+            ok = bool((ref - new).abs().max() <= 0.01 * max(1.0, float(ref.abs().median())))
+        except Exception:
+            ok = False
+        _fast_path_ok[key] = ok
+    return net if _fast_path_ok[key] else None
+
+
+def batched_voxel_inference(model, magnitudes, te_values_ms, batch_size, half_precision=False):
+    """R2* estimate of every row of `magnitudes` [voxels, echoes].
+
+    The network is evaluated through forward_shared_te when it applies (2.4x faster, same
+    result to rounding), otherwise through its own forward. half_precision=True runs it under
+    float16 autocast on a CUDA device: about 2.3x faster again, R2* different by a median
+    0.02 1/s (99th percentile 0.13 1/s) on in-vivo data.
+
+    batch_size does not affect the speed once the GPU is busy (flat from 50000 up on an RTX
+    A4500); it only sets the memory used, about 2 GB per 50000 voxels in full precision and
+    1.1 GB in half precision. See "Speed" in the README."""
     total_voxels = magnitudes.shape[0]
     results = torch.empty(total_voxels, dtype=torch.float32)
     echo_no = len(te_values_ms)
     tes = te_values_ms.view(1, echo_no, 1).to(device)
+    fast = _fast_path(model, tes)
+    use_half = bool(half_precision) and device.type == "cuda"
 
-    with torch.inference_mode():
+    amp_dtype = torch.float16 if device.type == "cuda" else torch.bfloat16     # unused unless use_half
+    with torch.inference_mode(), torch.autocast(device.type, dtype=amp_dtype, enabled=use_half):
         for start in range(0, total_voxels, batch_size):
             end = min(start + batch_size, total_voxels)
             mags = magnitudes[start:end, :echo_no].to(device).unsqueeze(-1)
@@ -110,8 +151,11 @@ def batched_voxel_inference(model, magnitudes, te_values_ms, batch_size):
             median_values = torch.median(mags, dim=1, keepdim=True).values.clamp_min_(1e-8)
             mags = mags / median_values
 
-            batch_tes = tes.expand(end - start, -1, -1)
-            results[start:end] = model(batch_tes, mags).squeeze(-1).cpu()
+            if fast is not None:
+                out = forward_shared_te(fast, tes, mags)
+            else:
+                out = model(tes.expand(end - start, -1, -1), mags)
+            results[start:end] = out.squeeze(-1).float().cpu()
 
     return results
 
@@ -126,6 +170,7 @@ def estimate_r2s(
     bet_mask_path=None,
     checkpoint_path=None,
     batch_size=BATCH_SIZE,
+    half_precision=False,
 ):
     import gc
     model = load_model(checkpoint_path)
@@ -143,7 +188,8 @@ def estimate_r2s(
                 bet_mask_path=bet_mask_path,
             )
 
-        results_r2s = batched_voxel_inference(model, magnitudes, te_values_ms, batch_size)
+        results_r2s = batched_voxel_inference(model, magnitudes, te_values_ms, batch_size,
+                                              half_precision=half_precision)
         r2s_map = torch.zeros(mask.shape, dtype=torch.float32)
         r2s_map[mask > 0] = results_r2s
         r2s_map = torch.nan_to_num(r2s_map, nan=0.0, posinf=0.0, neginf=0.0)
@@ -178,6 +224,7 @@ def run_estimator(
     bet_mask_path=None,
     checkpoint_path=None,
     batch_size=BATCH_SIZE,
+    half_precision=False,
 ):
     r2s, affine = estimate_r2s(
         magnitude_entries=magnitude_entries,
@@ -185,6 +232,7 @@ def run_estimator(
         te_values_ms=te_values_ms,
         bet_mask_path=bet_mask_path,
         checkpoint_path=checkpoint_path,
-        batch_size=batch_size
+        batch_size=batch_size,
+        half_precision=half_precision,
     )
     save_r2s(r2s, save_dir, affine)

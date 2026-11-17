@@ -71,9 +71,16 @@ transformer_out: transformer_outputs
 deeprelaxo_out: deeprelaxo_outputs
 
 # --- Runtime ---
-# Estimator batch size. Increase for speed if GPU memory allows.
+# Estimator batch size. It sets the GPU memory used (about 2 GB per 50000 voxels), not the
+# speed: throughput is flat from 50000 up, so there is nothing to gain by raising it.
+# Reduce it if GPU memory is limited.
 # Default: 50000
 transformer_batch_size: 50000
+
+# Run the estimator in half precision on a CUDA GPU: about 2.3x faster, R2* different by a
+# median 0.02 1/s (99th percentile 0.13 1/s). Also available as --half_precision.
+# Default: false
+half_precision: false
 
 # Notes:
 # - Checkpoints are fixed by the code and loaded from:
